@@ -4,6 +4,15 @@ All notable changes to NeonPlan 3D. The full notes in German and English are on 
 [releases page](https://github.com/Mastershort/neonplan3d/releases). Ideas and votes:
 [Discussions → Ideas](https://github.com/Mastershort/neonplan3d/discussions/categories/ideas).
 
+## 2.1.0.1 (fork)
+
+A private fork of 2.1.0; packs and Pro add-ons from the shop keep working (same domain, same keys).
+
+### New
+
+- **Calendar points** (⚙ Settings → 📅 Calendar): an invisible point in the plan carries a plate with the next events of a Home Assistant calendar, drawn like the waste bins' tags and sized with the symbol size. Per point: the calendar, an own number of events, "always open". For the house: events per plate, days ahead, open or folded to a 📅 with today's count, the date style (relative, counted days like "in 13 days", the date, the short date or an own format with placeholders such as `{weekday} {d}. {month} · {relative} {time}`) and the place under the title.
+- **Dev container** for Zed and VS Code with Home Assistant 2026.10.1, and `scripts/dev_import_prod.py`, which copies the instance id and the NeonPlan 3D data of a production installation into the untracked `dev/config`.
+
 ## 2.1.0
 
 ### New
