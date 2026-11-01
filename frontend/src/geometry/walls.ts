@@ -378,8 +378,10 @@ function mergeCollinear(drafts: Draft[], verts: Vec2[], fixed: ReadonlySet<numbe
       if (ids.length !== 2 || fixed.has(node)) continue;
       let w1 = list[ids[0]];
       let w2 = list[ids[1]];
-      if (w1.b !== node) w1 = flip(w1);
-      if (w2.a !== node) w2 = flip(w2);
+      const flipped1 = w1.b !== node;
+      const flipped2 = w2.a !== node;
+      if (flipped1) w1 = flip(w1);
+      if (flipped2) w2 = flip(w2);
       if (w1.a === w2.b) continue; // two walls forming a closed loop
       const d1 = unit(sub(verts[w1.b], verts[w1.a]));
       const d2 = unit(sub(verts[w2.b], verts[w2.a]));
@@ -398,7 +400,10 @@ function mergeCollinear(drafts: Draft[], verts: Vec2[], fixed: ReadonlySet<numbe
       ) {
         continue;
       }
-      const joined: Draft = { ...w1, b: w2.b, sources: joinSources(w1.sources, w2.sources) };
+      // both turned round only to line them up: turn the joined wall back, an outer wall keeps its room on the
+      // left (else a kitchen's outer wall in several pieces had its blinds inside)
+      const lined: Draft = { ...w1, b: w2.b, sources: joinSources(w1.sources, w2.sources) };
+      const joined = flipped1 && flipped2 ? flip(lined) : lined;
       const keep = list.filter((_, i) => i !== ids[0] && i !== ids[1]);
       keep.push(joined);
       list.length = 0;

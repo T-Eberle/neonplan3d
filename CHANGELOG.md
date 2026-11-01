@@ -4,6 +4,12 @@ All notable changes to NeonPlan 3D. The full notes in German and English are on 
 [releases page](https://github.com/Mastershort/neonplan3d/releases). Ideas and votes:
 [Discussions → Ideas](https://github.com/Mastershort/neonplan3d/discussions/categories/ideas).
 
+## 2.1.0.2 (fork)
+
+### Fixed
+
+- **Blinds sit outside again on outer walls drawn in several pieces:** where a room's outer wall is stored in several pieces (extra corners on a straight line), merging them could turn the wall round. NeonPlan then took the room for the outside, so the window's blind box and slats were drawn inside the room.
+
 ## 2.1.0.1 (fork)
 
 A private fork of 2.1.0; packs and Pro add-ons from the shop keep working (same domain, same keys).
