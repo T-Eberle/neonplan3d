@@ -1725,6 +1725,8 @@ function buildFurniture(buf: GeoBuffer, lines: LineBuffer, shadow: GeoBuffer, f:
       break;
     case "stairwell":
       return; // only a hole in the floor (see stairHoles in build.ts), nothing to draw
+    case "x_calendar":
+      return; // an invisible point: the 3D view hangs the calendar's card on it
     case "sideboard":
       sideboard(b, w, d, h);
       break;

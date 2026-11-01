@@ -88,6 +88,7 @@ function copyFonts() {
   }
 }
 
+// fork: main 750 KB, editor 970 KB and card editor 284 KB on 2026-11-01 for the calendar points (calendar.ts: the card, its date styles, own formats and places, the settings, the point's form and their texts)
 // main 674 KB and 3D 812 KB on 2026-10-22 for richer module cards (a state line, a second value, a chain, cells, a hint), module markers and solid module pipes
 // main 668 KB and 3D 808 KB on 2026-10-22 for what modules may draw: lines in the flow layer, surfaces over floors and lawns, labels, layered light on an item, a card curve, fields on furniture and module settings
 // 3D 796 KB and editor 916 KB on 2026-10-21 for roof sections that cut each other, wings meeting a roof in valleys (#466, #605) and the ends per section
@@ -143,7 +144,7 @@ function copyFonts() {
 // 3D 837 KB on 2026-10-31: the light of every lamp kept while a colour effect only recolours it (#885)
 // editor 950 KB on 2026-10-31: templates leave out every entity, wherever it stands (#855), and the room-tap setting in the editor (#883)
 // main 728 KB, editor 949 KB, card editor 276 KB on 2026-10-31: the room of this device and of the card (`voice_area`) for sentences without a room ("Licht an") and their texts
-const BUDGET = { "neonplan3d.js": 730 * 1024, "neonplan3d-fun.js": 40 * 1024, "neonplan3d-voice.js": 60 * 1024, "neonplan3d-locate.js": 160 * 1024, "neonplan3d-timetravel.js": 120 * 1024, "neonplan3d-3d.js": 837 * 1024, "neonplan3d-editor.js": 951 * 1024, "neonplan3d-card-editor.js": 279 * 1024 };
+const BUDGET = { "neonplan3d.js": 750 * 1024, "neonplan3d-fun.js": 40 * 1024, "neonplan3d-voice.js": 60 * 1024, "neonplan3d-locate.js": 160 * 1024, "neonplan3d-timetravel.js": 120 * 1024, "neonplan3d-3d.js": 837 * 1024, "neonplan3d-editor.js": 970 * 1024, "neonplan3d-card-editor.js": 284 * 1024 };
 
 copyFonts();
 if (watch) {

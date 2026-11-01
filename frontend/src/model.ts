@@ -3,6 +3,7 @@
 
 import { packItem } from "./packs.ts";
 import type { LampModel } from "./viewer/viewer3d.ts";
+import type { CalendarSettings } from "./calendar.ts";
 
 export type Vec2 = [number, number];
 
@@ -170,6 +171,12 @@ export interface Gang {
 export interface Furniture {
   /** Fixed against moving by accident. */
   locked?: boolean | null;
+  /** Calendar point (type "x_calendar"): the calendar whose next events its card lists. */
+  x_cal_entity?: EntityRef;
+  /** Calendar point: events on its card (null = the house's setting). */
+  x_cal_count?: number | null;
+  /** Calendar point: its card always shows its events and cannot be folded (a calendar to see all the time). */
+  x_cal_fixed?: boolean | null;
   /** Furniture block: items with the same group id are selected, moved and turned together (a kitchen, a wall unit). */
   group?: string | null;
   /** Pool Pro, sand filter: the six-way valve's position (null = filter). */
@@ -721,6 +728,8 @@ export interface BuildingSettings {
   weather_entity?: string | null;
   /** Which weather effects the 3D view shows (null = all but fog). */
   weather_effects?: WeatherEffect[] | null;
+  /** Calendar points: events per card, days ahead, cards open or as a symbol (calendar.ts). */
+  x_calendar?: CalendarSettings | null;
   /** Warning for a window open while it rains (default on). */
   rain_warning?: boolean;
   /** Rain from a weather station of your own (a rain sensor or a rain rate) instead of the weather entity (D407). */
@@ -1319,6 +1328,8 @@ export const FURNITURE_TYPES = [
   "lamp_fan",
   "wifi_ap",
   "water_heater",
+  // an invisible point with a calendar's glass card (calendar.ts)
+  "x_calendar",
 ] as const;
 
 /** Furniture library sections (the editor lists them in this order). */
@@ -1633,6 +1644,8 @@ export const FURNITURE_SIZE: Record<FurnitureType, [number, number, number]> = {
   fridge: [0.6, 0.65, 1.8],
   fridge_smart: [0.91, 0.73, 1.78],
   stairwell: [1.0, 2.6, 0.02],
+  // the point's height is where its card hangs
+  x_calendar: [0.4, 0.4, 1.6],
   stove: [0.6, 0.62, 0.92],
   sink: [0.9, 0.62, 0.92],
   bathtub: [1.7, 0.75, 0.58],
