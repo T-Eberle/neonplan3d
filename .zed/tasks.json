@@ -1,0 +1,22 @@
+[
+  {
+    "label": "Home Assistant (dev)",
+    "command": "scripts/dev-ha.sh",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "Frontend: watch",
+    "command": "cd frontend && npm run watch",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "Frontend: typecheck, test, build",
+    "command": "cd frontend && npm run typecheck && npm test && npm run build"
+  },
+  {
+    "label": "Python: ruff, mypy, pytest",
+    "command": "ruff check custom_components tests && ruff format --check custom_components tests && mypy custom_components/neonplan3d && pytest -q"
+  }
+]

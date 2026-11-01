@@ -1,0 +1,30 @@
+# Home Assistant for development: only what NeonPlan 3D needs. default_config is left out on purpose, it pulls in
+# bluetooth, zeroconf, cloud and analytics, which either fail in a container or should not run with the
+# production instance id that scripts/dev_import_prod.py copies here.
+homeassistant:
+  name: NeonPlan Dev
+  time_zone: Europe/Berlin
+  unit_system: metric
+  country: DE
+  language: de
+
+http:
+  server_port: 8123
+
+frontend:
+config:
+person:
+recorder:
+  purge_keep_days: 3
+history:
+logbook:
+energy:
+input_boolean:
+input_number:
+input_select:
+template:
+
+logger:
+  default: warning
+  logs:
+    custom_components.neonplan3d: debug

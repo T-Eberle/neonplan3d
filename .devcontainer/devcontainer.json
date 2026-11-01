@@ -1,0 +1,30 @@
+{
+  "name": "NeonPlan 3D",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+      // keep in line with the production installation (its .HA_VERSION)
+      "HA_VERSION": "2026.10.1"
+    }
+  },
+  "remoteUser": "vscode",
+  "workspaceFolder": "/workspaces/neonplan3d",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/neonplan3d,type=bind",
+  "mounts": [
+    // the host's node_modules hold macOS binaries (esbuild), the container keeps its own
+    "source=neonplan3d-node-modules,target=/workspaces/neonplan3d/frontend/node_modules,type=volume"
+  ],
+  // appPort publishes the port with every dev container client (Zed does not forward ports itself)
+  "appPort": ["8123:8123"],
+  "forwardPorts": [8123],
+  "containerEnv": {
+    "TZ": "Europe/Berlin"
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": ["charliermarsh.ruff", "ms-python.python", "esbenp.prettier-vscode"]
+    }
+  }
+}

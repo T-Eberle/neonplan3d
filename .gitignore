@@ -15,3 +15,8 @@ private/
 frontend/_*.mjs
 frontend/_*.mts
 frontend/_*.ts
+
+# dev container: the Home Assistant config folder keeps only its configuration.yaml in the repository; the
+# production data copied by scripts/dev_import_prod.py (instance id, licence key, floor plan) never leaves it
+dev/config/*
+!dev/config/configuration.yaml
