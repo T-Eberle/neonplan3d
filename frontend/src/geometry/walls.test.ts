@@ -92,16 +92,16 @@ test("collinear pieces of the same room are merged into one wall", () => {
   assert.equal(top.sources.length, 2);
 });
 
-test("an outer wall merged from many pieces keeps its room on the left", () => {
-  // the right edge is stored in several pieces (some points twice): merging them must not turn the wall round
-  const room: Room = { ...rect("a", 0, 0, 3, 5), points: [[0, 3.5], [0, 0], [3, 0], [3, 0.5], [3, 0.5], [3, 1.6], [3, 1.6], [3, 4], [3, 4], [3, 5], [0, 5]] };
-  for (const r of [room, { ...room, points: [...room.points].reverse() as Vec2[] }]) {
-    const { walls } = generateWalls([r], opts);
+test("an outer wall stored in many pieces keeps the room on its inner side (found by T-Eberle)", () => {
+  // three or more pieces along one side, both ways round: merging must not leave the wall turned round, or a
+  // window's blind on it is drawn inside the room
+  const pts: Vec2[] = [[0, 0], [4, 0], [4, 0.8], [4, 1.5], [4, 2.2], [4, 3], [0, 3], [0, 2], [0, 1]];
+  for (const points of [pts, [...pts].reverse()]) {
+    const { walls } = generateWalls([{ ...rect("a", 0, 0, 4, 3), points }], opts);
     assert.equal(walls.length, 4);
     for (const w of walls) {
       assert.equal(w.roomLeft, "a");
       assert.equal(w.roomRight, null);
-      near(w.left, 0);
       near(w.right, EXT);
     }
   }

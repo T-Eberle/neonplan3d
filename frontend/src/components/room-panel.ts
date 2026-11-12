@@ -2,13 +2,14 @@
 // scenes and scripts). Shown next to the 3D view when a room is selected.
 
 import { css, html, LitElement, nothing, type TemplateResult } from "lit";
-import { areaEntities, coverTiltButtons, entityName, groupByDevice, isUnavailable, kindOf, roomClimateSensors, roomClimateValue, roomPanelEntities, fromCelsius, tempUnit, type DeviceKind } from "../devices.ts";
+import { areaEntities, coverCalls, coverTiltButtons, slatTilt, slatsInverted, entityName, groupByDevice, isUnavailable, kindOf, roomClimateSensors, roomClimateValue, roomPanelEntities, fromCelsius, tempUnit, type DeviceKind } from "../devices.ts";
 import { formatNumber, translate, type I18nKey } from "../i18n.ts";
 import { hasFeature, released } from "../features.ts";
 import { locatedPersons, personsShown } from "../presence.ts";
 import { iconPath } from "../icons.ts";
 import { openMoreInfo, stateText } from "../markers.ts";
 import type { Building, Floor, Room } from "../model.ts";
+import { callCount, cleaningCall, everythingOff } from "../room-actions.ts";
 import { roofWindowsOver } from "../solar.ts";
 import { controls, tokens } from "../styles.ts";
 import type { HassEntity, HomeAssistant } from "../types.ts";
@@ -51,6 +52,7 @@ export class Fp3dRoomPanel extends LitElement {
     confirmEntities: { attribute: false },
     sheets: { attribute: false },
     readOnly: { type: Boolean },
+    walk: { type: Boolean },
     _showAll: { state: true },
     _tick: { state: true },
   };
@@ -65,6 +67,8 @@ export class Fp3dRoomPanel extends LitElement {
   declare confirmEntities: Set<string> | null;
   /** Time travel: the panel shows the past and switches nothing. */
   declare readOnly: boolean;
+  /** Offer the walk starting in this room (#950): a tap fires "walk-here". */
+  declare walk: boolean;
   /** What modules offer in this room (📢 an announcement …): a button each, a tap fires "sheet-open" with its id. */
   declare sheets: { id: string; icon: string; title: string }[] | null;
   /** Show the other devices of the area as well (their main entities). */
@@ -106,6 +110,21 @@ export class Fp3dRoomPanel extends LitElement {
   private call(domain: string, service: string, data: Record<string, unknown>): void {
     if (this.readOnly) return;
     void this.hass.callService(domain, service, data);
+  }
+
+  /** One tap for the whole room: the robot vacuum sent there, everything switched off (with how many). */
+  private renderRoomActions(room: Room) {
+    if (this.readOnly) return nothing;
+    const clean = cleaningCall(this.hass, room);
+    const off = this.floor ? everythingOff(this.hass, this.floor, room) : [];
+    if (!clean && !off.length) return nothing;
+    const run = (calls: { domain: string; service: string; data: Record<string, unknown> }[]) => calls.forEach((c) => this.call(c.domain, c.service, c.data));
+    return html`<div class="fp3d-rp-sheets">
+      ${clean ? html`<button class="fp3d-rp-sheet" @click=${() => run([clean])}><span aria-hidden="true">🧹</span>${this.t("panel_clean")}</button>` : nothing}
+      ${off.length
+        ? html`<button class="fp3d-rp-sheet" @click=${() => run(off)}><span aria-hidden="true">⏻</span>${this.t("panel_everything_off", { n: callCount(off) })}</button>`
+        : nothing}
+    </div>`;
   }
 
   private get areaName(): string | undefined {
@@ -194,6 +213,7 @@ export class Fp3dRoomPanel extends LitElement {
           <h2>${room.name}</h2>
           ${facts.length ? html`<p class="fp3d-rp-facts">${facts.join(" · ")}</p>` : nothing}
           ${this.renderHere(room)}
+          ${this.renderRoomActions(room)}
           ${this.readOnly ? html`<p class="fp3d-rp-facts fp3d-rp-ro-note">⏪ ${this.t("tt_readonly")}</p>` : nothing}
           ${this.sheets?.length && !this.readOnly
             ? html`<div class="fp3d-rp-sheets">
@@ -205,6 +225,11 @@ export class Fp3dRoomPanel extends LitElement {
               </div>`
             : nothing}
         </div>
+        ${this.walk && !this.readOnly && room.points.length >= 3
+          ? html`<button class="fp3d-rp-close fp3d-rp-walk" title=${this.t("walk_start")} aria-label=${this.t("walk_start")} @click=${() => this.fire("walk-here")}>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13" cy="4.5" r="1.8" /><path d="m9 20 2.5-6 2.5 2.5V21M7.5 11l3-3.5 3.5 1.5 2 3.5M11.5 14l1-5" /></svg>
+            </button>`
+          : nothing}
         <button class="fp3d-rp-close" aria-label=${this.t("close")} @click=${() => this.fire("close")}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
@@ -235,9 +260,9 @@ export class Fp3dRoomPanel extends LitElement {
               "panel_covers",
               covers.map((st) => this.coverRow(st)),
               covers.length > 1
-                ? html`<button class="fp3d-btn fp3d-rp-small" @click=${() => this.call("cover", "open_cover", { entity_id: covers.filter((c) => !isUnavailable(c)).map((c) => c.entity_id) })}>
+                ? html`<button class="fp3d-btn fp3d-rp-small" @click=${() => this.covers(covers, "open")}>
                       ${this.t("panel_all_open")}</button
-                    ><button class="fp3d-btn fp3d-rp-small" @click=${() => this.call("cover", "close_cover", { entity_id: covers.filter((c) => !isUnavailable(c)).map((c) => c.entity_id) })}>
+                    ><button class="fp3d-btn fp3d-rp-small" @click=${() => this.covers(covers, "close")}>
                       ${this.t("panel_all_close")}
                     </button>`
                 : nothing,
@@ -303,6 +328,15 @@ export class Fp3dRoomPanel extends LitElement {
     </div>`;
   }
 
+  /** A row's symbol: the own one of the furniture or the placed device behind this entity (#1005), else by kind. */
+  private rowIcon(kind: DeviceKind, id: string) {
+    const f = this.floor;
+    const own = f?.furniture.find((m) => m.icon && (m.entity === id || m.fan === id))?.icon ?? f?.placements.find((p) => p.icon && p.entity_id === id)?.icon;
+    if (!own) return icon(kind);
+    const clean = own.replace(/^mdi:/, "").replace(/[^a-z0-9-]/gi, "");
+    return html`<ha-icon icon=${`mdi:${clean}`} style="--mdc-icon-size:18px"></ha-icon>`;
+  }
+
   private lightRow(st: HassEntity) {
     const a = st.attributes;
     const on = st.state === "on";
@@ -315,7 +349,7 @@ export class Fp3dRoomPanel extends LitElement {
     const kMax = (a.max_color_temp_kelvin as number | undefined) ?? 6500;
     const id = st.entity_id;
     return html`<div class="fp3d-rp-row">
-      <span class="fp3d-rp-icon ${on ? "fp3d-rp-on" : ""}">${icon("light")}</span>
+      <span class="fp3d-rp-icon ${on ? "fp3d-rp-on" : ""}">${this.rowIcon("light", id)}</span>
       ${this.nameButton(id)}
       <span class="fp3d-rp-state">${this.stateOf(st)}</span>
       ${this.toggle(st, on, () => this.call("light", "toggle", { entity_id: id }))}
@@ -357,21 +391,27 @@ export class Fp3dRoomPanel extends LitElement {
     </div>`;
   }
 
+  /** Open, close or stop covers the way each can: slat-only blinds by their tilt (#920). */
+  private covers(list: HassEntity[], what: "open" | "close" | "stop"): void {
+    const ids = list.filter((c) => !isUnavailable(c)).map((c) => c.entity_id);
+    for (const c of coverCalls(this.hass, ids, what)) this.call("cover", c.service, c.data);
+  }
+
   private coverRow(st: HassEntity) {
     const a = st.attributes;
     const features = (a.supported_features as number | undefined) ?? 0;
     const id = st.entity_id;
     const na = isUnavailable(st);
     return html`<div class="fp3d-rp-row">
-      <span class="fp3d-rp-icon">${icon("cover")}</span>
+      <span class="fp3d-rp-icon">${this.rowIcon("cover", st.entity_id)}</span>
       ${this.nameButton(id)}
       <span class="fp3d-rp-state">${this.stateOf(st)}</span>
       <div class="fp3d-rp-buttons">
-        <button class="fp3d-btn fp3d-rp-small" ?disabled=${na} @click=${() => this.askFor(id) && this.call("cover", "open_cover", { entity_id: id })}>${this.t("cover_open")}</button>
-        ${features & COVER_STOP
-          ? html`<button class="fp3d-btn fp3d-rp-small" ?disabled=${na} @click=${() => this.call("cover", "stop_cover", { entity_id: id })}>${this.t("cover_stop")}</button>`
+        <button class="fp3d-btn fp3d-rp-small" ?disabled=${na} @click=${() => this.askFor(id) && this.covers([st], "open")}>${this.t("cover_open")}</button>
+        ${features & COVER_STOP || (features & 64 && !(features & 3))
+          ? html`<button class="fp3d-btn fp3d-rp-small" ?disabled=${na} @click=${() => this.covers([st], "stop")}>${this.t("cover_stop")}</button>`
           : nothing}
-        <button class="fp3d-btn fp3d-rp-small" ?disabled=${na} @click=${() => this.askFor(id) && this.call("cover", "close_cover", { entity_id: id })}>${this.t("cover_close")}</button>
+        <button class="fp3d-btn fp3d-rp-small" ?disabled=${na} @click=${() => this.askFor(id) && this.covers([st], "close")}>${this.t("cover_close")}</button>
       </div>
       ${features & COVER_SET_POSITION && typeof a.current_position === "number"
         ? html`<label class="fp3d-rp-slider"
@@ -393,8 +433,11 @@ export class Fp3dRoomPanel extends LitElement {
               min="0"
               max="100"
               ?disabled=${na}
-              .value=${String(a.current_tilt_position)}
-              @change=${(e: Event) => this.call("cover", "set_cover_tilt_position", { entity_id: id, tilt_position: Number((e.target as HTMLInputElement).value) })}
+              .value=${String(slatTilt(st, slatsInverted(this.building, id)) ?? 0)}
+              @change=${(e: Event) => {
+                const shown = Number((e.target as HTMLInputElement).value);
+                this.call("cover", "set_cover_tilt_position", { entity_id: id, tilt_position: slatsInverted(this.building, id) ? 100 - shown : shown });
+              }}
           /></label>`
         : coverTiltButtons(this.hass?.states[id])
           ? html`<div class="fp3d-rp-buttons">
@@ -415,7 +458,7 @@ export class Fp3dRoomPanel extends LitElement {
     const modes = (a.hvac_modes as string[] | undefined) ?? [];
     const set = (v: number) => this.call("climate", "set_temperature", { entity_id: id, temperature: Math.min(max, Math.max(min, Math.round(v / step) * step)) });
     return html`<div class="fp3d-rp-row">
-      <span class="fp3d-rp-icon ${a.hvac_action === "heating" ? "fp3d-rp-on" : ""}">${icon("climate")}</span>
+      <span class="fp3d-rp-icon ${a.hvac_action === "heating" ? "fp3d-rp-on" : ""}">${this.rowIcon("climate", st.entity_id)}</span>
       ${this.nameButton(id)}
       <span class="fp3d-rp-state">${this.stateOf(st)}</span>
       ${target !== null
@@ -464,7 +507,7 @@ export class Fp3dRoomPanel extends LitElement {
     const na = isUnavailable(st) || st.state === "off";
     const title = [a.media_title, a.media_artist].filter((x) => typeof x === "string" && x).join(" · ");
     return html`<div class="fp3d-rp-row">
-      <span class="fp3d-rp-icon ${st.state === "playing" ? "fp3d-rp-on" : ""}">${icon("media")}</span>
+      <span class="fp3d-rp-icon ${st.state === "playing" ? "fp3d-rp-on" : ""}">${this.rowIcon("media", st.entity_id)}</span>
       ${this.nameButton(id)}
       <span class="fp3d-rp-state">${this.stateOf(st, this.stateLabel(st.state))}</span>
       ${title ? html`<p class="fp3d-rp-media fp3d-rp-wide">${title}</p>` : nothing}
@@ -500,7 +543,7 @@ export class Fp3dRoomPanel extends LitElement {
     const on = kind === "lock" ? st.state === "unlocked" || st.state === "open" : st.state === "on";
     const act = () => (kind === "lock" ? this.call("lock", on ? "lock" : "unlock", { entity_id: id }) : this.call(domain, "toggle", { entity_id: id }));
     return html`<div class="fp3d-rp-row">
-      <span class="fp3d-rp-icon ${on ? "fp3d-rp-on" : ""}">${icon(kind)}</span>
+      <span class="fp3d-rp-icon ${on ? "fp3d-rp-on" : ""}">${this.rowIcon(kind, id)}</span>
       ${this.nameButton(id)}
       <span class="fp3d-rp-state">${this.stateOf(st)}</span>
       ${this.toggle(st, on, act)}
@@ -534,7 +577,7 @@ export class Fp3dRoomPanel extends LitElement {
     const kind = kindOf(st.entity_id)!;
     const warn = kind === "binary" && st.state === "on";
     return html`<div class="fp3d-rp-row">
-      <span class="fp3d-rp-icon ${warn ? "fp3d-rp-on" : ""}">${icon(kind)}</span>
+      <span class="fp3d-rp-icon ${warn ? "fp3d-rp-on" : ""}">${this.rowIcon(kind, st.entity_id)}</span>
       ${this.nameButton(st.entity_id)}
       <span class="fp3d-rp-state">${this.stateOf(st)}</span>
     </div>`;
@@ -638,6 +681,10 @@ export class Fp3dRoomPanel extends LitElement {
         background: rgba(255, 255, 255, 0.06);
         color: var(--fp3d-text);
         cursor: pointer;
+      }
+      .fp3d-rp-walk {
+        margin-right: 6px;
+        color: #37e0ff;
       }
       .fp3d-rp-body {
         overflow-y: auto;

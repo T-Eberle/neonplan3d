@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { emptyBuilding, newFloor, ROOF_SHAPES, type Room, type RoofSection } from "./model.ts";
-import { onSection, sectionTurn, turnPoint, turnSectionAbout, coversIn, cutHole, cutUnder, dormerHole, dormerHoles, dormerParent, floorOutline, lineOutside, sectionCovers, sectionEnds, sectionUV, wingJunction, wingSection, offsetPolygon, polygonBox, proposeDormer, ridgeHeight, roofRider, roofSectionsFromRooms, roofUnderAt, sectionFrame, sectionGeometry, sectionHeightAt, sectionOverhang, sectionPolygon, sectionProfile, wallTopUnder } from "./roof-sections.ts";
+import { onSection, sectionTurn, turnPoint, turnSectionAbout, coversIn, cutHole, cutUnder, dormerHole, dormerHoles, dormerParent, sectionsCut, turnedDormer, floorOutline, lineOutside, sectionCovers, sectionEnds, sectionUV, wingJunction, wingSection, offsetPolygon, polygonBox, proposeDormer, ridgeHeight, roofRider, roofSectionsFromRooms, roofUnderAt, sectionFrame, sectionGeometry, sectionHeightAt, sectionOverhang, sectionPolygon, sectionProfile, wallTopUnder } from "./roof-sections.ts";
 import { buildRoof } from "./viewer/roof.ts";
 
 const near = (a: number, b: number, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
@@ -125,6 +125,72 @@ test("a canopy over a terrace draws see-through panels and posts instead of wall
   near(Math.min(...ys), 0);
   // the side at the house wall has no overhang
   assert.equal(sectionOverhang(b, canopy, 0.15).b, 0);
+});
+
+/** A two-storey house 10 × 8 with thick outer walls, and a terrace roof against its wall at z = 8 (side b). */
+function terraceCase(ext: number) {
+  const b = emptyBuilding();
+  b.settings.wall_exterior = ext;
+  b.floors = [
+    { ...newFloor("eg", "EG", 0), height: 2.6, rooms: [rect("house", 0, 0, 10, 8)] },
+    { ...newFloor("dg", "DG", 2.8), height: 2.5, rooms: [rect("up", 0, 0, 10, 8)] },
+  ];
+  const canopy = (z0: number, patch: Partial<RoofSection> = {}) =>
+    section({ x0: 2, z0, x1: 8, z1: z0 + 3, shape: "pent", axis: "x", flip: true, eave_a: 2.4, eave_b: 2.4, pitch_a: 6, pitch_b: 6, base: 2.4, open: true, ...patch });
+  return { b, canopy };
+}
+
+test("a terrace roof against the outer face of a thick wall has no overhang into the house (#863)", () => {
+  for (const ext of [0.24, 0.365, 0.42, 0.5]) {
+    const { b, canopy } = terraceCase(ext);
+    // drawn at the room's corners (into the wall), flush with the outer wall face, or a little short of it
+    for (const z0 of [8, 8 + ext, 8 + ext + 0.1, 8 + ext + 0.25]) {
+      const o = sectionOverhang(b, canopy(z0), 0.15);
+      assert.deepEqual([o.a, o.b, o.u0, o.u1], [0.15, 0, 0.15, 0.15], `wall ${ext}, edge at z ${z0}`);
+    }
+    // on the walls of the ground floor too (a terrace drawn as a room: the roof sits at its wall tops)
+    assert.equal(sectionOverhang(b, canopy(8 + ext, { base: 2.6, eave_a: 2.6, eave_b: 2.6 }), 0.15).b, 0, `wall ${ext} on the walls`);
+    // a carport a metre away from the house keeps its overhang all round
+    assert.equal(sectionOverhang(b, canopy(8 + ext + 1), 0.15).b, 0.15, `wall ${ext} free`);
+  }
+});
+
+test("a roof over its own floor keeps its overhang beside thick walls (#863)", () => {
+  for (const ext of [0.24, 0.5]) {
+    const { b } = terraceCase(ext);
+    // the attic roof starts below the top floor's ceiling (knee walls): that floor is "taller", but the roof stands over it
+    const attic = (x0: number, z0: number, x1: number, z1: number) => section({ x0, z0, x1, z1, eave_a: 3.8, eave_b: 3.8, base: 3.8 });
+    for (const s of [attic(-ext, -ext, 10 + ext, 8 + ext), attic(0, 0, 10, 8), attic(-ext + 0.03, -ext + 0.03, 10 + ext - 0.03, 8 + ext - 0.03)]) {
+      const o = sectionOverhang(b, s, 0.4);
+      assert.deepEqual([o.a, o.b, o.u0, o.u1], [0.4, 0.4, 0.4, 0.4], `wall ${ext}, ${s.x0}`);
+    }
+  }
+});
+
+test("a turned terrace roof finds the turned house's wall as well (#863)", () => {
+  const { b, canopy } = terraceCase(0.42);
+  // the house and its terrace roof, both turned 30° about the house's corner
+  const flat = canopy(8.42);
+  const turned = { ...flat, rotation: 30, pivot: [0, 0] as [number, number] };
+  const t = sectionTurn(turned);
+  for (const f of b.floors) for (const r of f.rooms) r.points = r.points.map((p) => turnPoint(t, p));
+  const o = sectionOverhang(b, turned, 0.15);
+  assert.deepEqual([o.a, o.b, o.u0, o.u1], [0.15, 0, 0.15, 0.15]);
+});
+
+test("an overhang set per side wins over the automatic one; unset sides stay automatic (#863)", () => {
+  const { b, canopy } = terraceCase(0.24);
+  const auto = sectionOverhang(b, canopy(8.24), 0.15);
+  assert.deepEqual([auto.a, auto.b, auto.u0, auto.u1], [0.15, 0, 0.15, 0.15]);
+  // a deeper overhang at the front, none at one end, the rest automatic (the house side stays at 0)
+  const o = sectionOverhang(b, canopy(8.24, { overhang_sides: [0.6, null, 0, null] }), 0.15);
+  assert.deepEqual([o.a, o.b, o.u0, o.u1], [0.6, 0, 0, 0.15]);
+  // set by hand, even the house side gets one
+  assert.equal(sectionOverhang(b, canopy(8.24, { overhang_sides: [null, 0.3, null, null] }), 0.15).b, 0.3);
+  // the viewer and the solar faces take it from there: the roof reaches 0.6 m beyond its front edge
+  b.settings.roof = { type: "custom", pitch: 35, overhang: 0.4, sections: [canopy(8.24, { overhang_sides: [0.6, null, null, null] })] };
+  const zs = buildRoof(b)[0].glass.p.filter((_, i) => i % 3 === 2);
+  near(Math.max(...zs), 8.24 + 3 + 0.6, 0.02);
 });
 
 test("a flat roof as a free shape: the floor's outline, grown by the wall thickness, covers the rooms only", () => {
@@ -393,6 +459,23 @@ test("a dormer on a turned section turns with it and still finds its parent and 
   near(hole.v0, 0, 1e-6);
 });
 
+test("a cross gable at an angle on a bigger roof is cut by that roof like a wing, not given a dormer's hole", () => {
+  const main = section({ x1: 14, z1: 10 });
+  // a gable turned 35° standing on the main roof's slope (a bay's roof at an angle, the 45° gable from Discord)
+  const bay = section({ id: "b", x0: 3.5, z0: 6, x1: 6, z1: 11, axis: "z", eave_a: 5.5, eave_b: 5.5, base: 5.4, rotation: 35, pivot: [4.75, 8.5] });
+  assert.equal(dormerParent([main, bay], bay), main);
+  assert.equal(turnedDormer([main, bay], bay), true);
+  assert.equal(sectionsCut([main, bay], main, bay), true);
+  // square to the ridge (0° or 90°) it stays a dormer with its hole
+  const square = { ...bay, rotation: 90 };
+  assert.equal(turnedDormer([main, square], square), false);
+  assert.equal(sectionsCut([main, square], main, square), false);
+  // a dormer turned along with its turned roof is still a dormer (#634)
+  const tp = section({ x1: 14, z1: 10, rotation: 25, pivot: [7, 5] });
+  const td = proposeDormer(tp, "a", "d1");
+  assert.equal(turnedDormer([tp, td], td), false);
+});
+
 test("a turned wing is not joined at right angles: the other roof's planes cut it instead", () => {
   const main = section({ x1: 14, z1: 10 });
   const wing = section({ id: "w", x0: 4, z0: 8, x1: 10, z1: 16, axis: "z", eave_a: 3, eave_b: 3, rotation: 20 });
@@ -416,4 +499,20 @@ test("turning a roof takes its dormer along: both turn about the roof's point an
   const back = turnSectionAbout(turnSectionAbout(parent, 200, p), -200, p);
   assert.equal(back.rotation, 0);
   for (const k of ["x0", "z0", "x1", "z1"] as const) near(back[k], parent[k]);
+});
+
+test("a wall face a few millimetres outside its roof ends under that roof, not under a lower roof below (#1051)", () => {
+  // the house roof starts at x = 1.113; the garage roof runs under it and beyond, its ridge 0.46 m above the top floor
+  const main = section({ id: "main", axis: "z", x0: 1.113, z0: 0, x1: 9, z1: 10, eave_a: 5.18, eave_b: 5.18, pitch_a: 25, pitch_b: 25, base: 5.18 });
+  const garage = section({ id: "garage", axis: "x", x0: -0.075, z0: 2, x1: 1.615, z1: 8, eave_a: 1.661, eave_b: 1.661, pitch_a: 26.57, pitch_b: 26.57, base: 1.661 });
+  const b = { settings: { roof: { type: "custom" as const, pitch: 25, overhang: 0, sections: [main, garage] } } };
+  const level = 2.74;
+  const inside = roofUnderAt(b, 1.2, 5, level)!;
+  // 6 mm outside the house roof: its edge counts (the eave, 5.18 m less the roof's thickness)
+  near(roofUnderAt(b, 1.107, 5, level)!, 5.18 - 0.14);
+  assert.ok(inside > 5, `under the house roof ${inside}`);
+  // well outside: the garage roof alone, as before
+  assert.ok(roofUnderAt(b, 0.9, 5, level)! < 3.1);
+  // beside a roof with nothing else above: still no roof at all
+  assert.equal(roofUnderAt({ settings: { roof: { ...b.settings.roof, sections: [main] } } }, 1.107, 5, level), null);
 });

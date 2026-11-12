@@ -317,7 +317,10 @@ export function generateWalls(rooms: readonly Room[], options: WallOptions, free
     const room = rooms.find((r) => r.points.length >= 3 && pointInPolygon(mid, r.points))?.id ?? null;
     const half = (w.thickness ?? options.interior) / 2;
     const height = typeof w.height === "number" && w.height > 0 ? w.height : undefined;
-    drafts.push({ free: w.id, a: ia, b: ib, left: half, right: half, exterior: false, roomLeft: room, roomRight: room, sources: [], height });
+    // a sloping free wall (#834): the same slope as a room edge's, from end a to end b
+    const sl = w.slope;
+    const slope: WallSlope | undefined = sl ? { p: [w.a[0], w.a[1]], q: [w.b[0], w.b[1]], h0: Math.max(0.05, sl[0]), h1: Math.max(0.05, sl[1]) } : undefined;
+    drafts.push({ free: w.id, a: ia, b: ib, left: half, right: half, exterior: false, roomLeft: room, roomRight: room, sources: [], ...(slope ? { height: Math.max(slope.h0, slope.h1), slope } : { height }) });
   });
 
   // 5. merge collinear runs through nodes where nothing else meets (never across a split point)
@@ -378,10 +381,11 @@ function mergeCollinear(drafts: Draft[], verts: Vec2[], fixed: ReadonlySet<numbe
       if (ids.length !== 2 || fixed.has(node)) continue;
       let w1 = list[ids[0]];
       let w2 = list[ids[1]];
-      const flipped1 = w1.b !== node;
-      const flipped2 = w2.a !== node;
-      if (flipped1) w1 = flip(w1);
-      if (flipped2) w2 = flip(w2);
+      // turned round only to line them up: when both were, the joined wall is turned back (an outer wall keeps
+      // its room on the left, else a blind on it was drawn inside the room)
+      const turned = w1.b !== node && w2.a !== node;
+      if (w1.b !== node) w1 = flip(w1);
+      if (w2.a !== node) w2 = flip(w2);
       if (w1.a === w2.b) continue; // two walls forming a closed loop
       const d1 = unit(sub(verts[w1.b], verts[w1.a]));
       const d2 = unit(sub(verts[w2.b], verts[w2.a]));
@@ -400,10 +404,8 @@ function mergeCollinear(drafts: Draft[], verts: Vec2[], fixed: ReadonlySet<numbe
       ) {
         continue;
       }
-      // both turned round only to line them up: turn the joined wall back, an outer wall keeps its room on the
-      // left (else a kitchen's outer wall in several pieces had its blinds inside)
       const lined: Draft = { ...w1, b: w2.b, sources: joinSources(w1.sources, w2.sources) };
-      const joined = flipped1 && flipped2 ? flip(lined) : lined;
+      const joined = turned ? flip(lined) : lined;
       const keep = list.filter((_, i) => i !== ids[0] && i !== ids[1]);
       keep.push(joined);
       list.length = 0;

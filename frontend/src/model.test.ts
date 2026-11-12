@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { emptyBuilding, lockAlong, gangEntities, gangPlateWidth, gangsOf, floorElevation, newFloor, outdoorZones, zonesOf, openingPreset, openingStyle, normalizeBuilding, outdoorDrop, outdoorGround, resizeFurniture, roomTiles, sidelightLayout, spotGrid, surfaceHeight, syncCameraLooks, type Furniture } from "./model.ts";
+import { emptyBuilding, lockAlong, gangEntities, gangPlateWidth, gangsOf, floorElevation, newFloor, outdoorZones, zonesOf, openingPreset, openingStyle, normalizeBuilding, outdoorDrop, outdoorGround, outdoorSurface, furnitureCorner, resizeFurniture, roomTiles, sidelightLayout, spotGrid, surfaceHeight, syncCameraLooks, type Furniture } from "./model.ts";
 
 test("a sidelight sits opposite the hinge, on the hinge side when asked, and keeps the leaf at least half a metre", () => {
   const none = {};
@@ -110,6 +110,21 @@ test("outdoor lamps stand on the ground, or on a terrace", () => {
   assert.equal(outdoorGround({ ...newFloor("og", "OG", 2.75), outdoor: [] }, 1, 1), 0);
 });
 
+test("the surface on top where areas overlap: a terrace drawn on a lawn, a path cut out of it (#893)", () => {
+  const floor = newFloor("eg", "EG", 0);
+  floor.outdoor = [
+    { id: "l", type: "lawn", points: [[-10, -10], [10, -10], [10, 10], [-10, 10]] },
+    { id: "t", type: "terrace", points: [[0, 0], [4, 0], [4, 3], [0, 3]] },
+  ];
+  // the lawn is drawn first: the old lookup answers with it, the window light lay under the terrace
+  assert.ok(Math.abs(outdoorGround(floor, 2, 1) - (-0.2 + 0.012)) < 1e-9);
+  assert.ok(Math.abs(outdoorSurface(floor, 2, 1) - (-0.2 + 0.12)) < 1e-9);
+  assert.ok(Math.abs(outdoorSurface(floor, 8, 8) - (-0.2 + 0.012)) < 1e-9);
+  // an area cut out of the one beneath wins, even when lower
+  floor.outdoor.push({ id: "p", type: "path", cut: true, points: [[1, 1], [2, 1], [2, 2], [1, 2]] } as never);
+  assert.ok(Math.abs(outdoorSurface(floor, 1.5, 1.5) - (-0.2 + 0.02)) < 1e-9);
+});
+
 test("resizing drags one corner while the opposite corner stays", () => {
   const f: Furniture = { id: "f", type: "table", x: 1, z: 1, rotation: 0, w: 1, d: 1, h: 0.75, variant: null, entity: null, power: null };
   // pull the front-right corner from (1.5, 1.5) to (2.5, 2)
@@ -120,6 +135,17 @@ test("resizing drags one corner while the opposite corner stays", () => {
   assert.equal(turned.d, 1);
   // never smaller than 10 cm
   assert.equal(resizeFurniture(f, [1, 1], [0, 0], 0.05).w, 0.1);
+});
+
+test("a corner handle can sit out from a small item and still drag its corner (#908)", () => {
+  const f: Furniture = { id: "f", type: "sensor_motion", x: 1, z: 1, rotation: 90, w: 0.1, d: 0.1, h: 0.1, variant: null, entity: null, power: null };
+  const [cx, cz] = furnitureCorner(f, [1, 1]);
+  assert.ok(Math.abs(cx - 0.95) < 1e-9 && Math.abs(cz - 1.05) < 1e-9);
+  // 0.2 m out along both sides: the handle stands clear of the item
+  const [hx, hz] = furnitureCorner(f, [1, 1], 0.2);
+  assert.ok(Math.abs(hx - 0.75) < 1e-9 && Math.abs(hz - 1.25) < 1e-9);
+  // the editor keeps the grab offset: the pointer at the handle leaves the size as it is
+  assert.deepEqual(resizeFurniture(f, [1, 1], [hx - (hx - cx), hz - (hz - cz)], 0.05), { x: 1, z: 1, w: 0.1, d: 0.1 });
 });
 
 test("floors from Home Assistant levels are stacked by level", () => {

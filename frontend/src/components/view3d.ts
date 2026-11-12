@@ -5,6 +5,8 @@ import { linesField } from "./lines-field.ts";
 import { carState, type CarState, heatSensorOn, roomClimateValue,
   appColor,
   areaEntities,
+  coverCalls,
+  slatsInverted,
   entityName,
   furnitureEntities,
   isActive,
@@ -30,6 +32,8 @@ import { carState, type CarState, heatSensorOn, roomClimateValue,
   climateModeGlow,
   cooktopLevel,
   onlyColor,
+  fixedGlowColor,
+  colorCapable,
   fanSpeed,
   apOnline,
   isPulseDrive,
@@ -37,7 +41,7 @@ import { carState, type CarState, heatSensorOn, roomClimateValue,
 } from "../devices.ts";
 import { alertColor, alertEntities, alertSources, alertText, findAlerts, isOutage, type Alert, type AlertSources } from "../alerts.ts";
 import { iconPath, iconSvg, mdiIcon } from "../icons.ts";
-import { applianceIdle, binColors, binDue, binNext, binOut, binOutToggleable, binTagsShown, doorsOf, fetchPickups, FinishedMemory, fridgeOpenTooLong, groupTags, hassCountry, isFinishedState, mailboxPost, nextFridgeCheck, plantThirsty, remainingMinutes, remainingText, servicesDue, setHouseholdCountry, wasteCalendars, isPackPlant, type HouseholdItem, type HouseholdTag, type Pickup } from "../household.ts";
+import { applianceIdle, applianceOf, type ApplianceKind, binColors, binDue, binNext, binOut, binOutToggleable, binTagsShown, doorsOf, fetchPickups, FinishedMemory, fridgeOpenTooLong, groupTags, hassCountry, isFinishedState, mailboxPost, nextFridgeCheck, plantThirsty, remainingMinutes, remainingText, servicesDue, setHouseholdCountry, wasteCalendars, isPackPlant, type HouseholdItem, type HouseholdTag, type Pickup } from "../household.ts";
 import { deviceSensors, energySummary, fetchSolarRows, fetchTodayChange, fieldLevels, fieldPowers, findConsumers, flowColor, flowSegments, gridPoint, powerSensorFor, readPower, solarCurvePath, solarDayFromStats, type Consumer, type EnergySummary, type StatRow } from "../energy.ts";
 import { fieldFace, fieldSize, roofFaces, roofWindowRoom } from "../solar.ts";
 import { type CustomButton, type EntityRef, DEFAULT_HOLOGRAM, lockAlong, type PoolPipe, type RoofWindow, type SolarField, uid } from "../model.ts";
@@ -107,10 +111,14 @@ const GRID_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" s
 /** The grid connection during a power outage: the bolt crossed out (#214). */
 const GRID_OFF_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/><path d="M3 3l18 18"/></svg>';
 import { STAGE, type Theme } from "../themes.ts";
+import { allStyles, resolveStyle, setCustomStyles, styleById, styleFromText, type StyleDef } from "../looks.ts";
 import { HEAT_SCALES, heatColor, heatGradient, roomValues, type HeatMode } from "../heatmap.ts";
 import { furnitureName } from "../furniture-names.ts";
-import { fetchImage, saveBuilding } from "../api.ts";
+import { fetchImage, MAIN_PLAN, saveBuilding } from "../api.ts";
+import { roomsOnly, shownRoomIds } from "../rooms-filter.ts";
 import { formatNumber, translate, type I18nKey } from "../i18n.ts";
+import { furnitureShown, showIfSignature } from "../show-if.ts";
+import { fireworkNow, lawnSnow, roofLightsOn, snowLevel, winterOf } from "../winter.ts";
 import { getPacks, isPackCooktop, isPackHeater, isPackType, isRobotVacuum, mountBase, packItem, packRobotCentre, packMotion, packName, packsVersion } from "../packs.ts";
 import { parkedVehicle, PRESENT_STATES, parkedVehicles, vehicleFurniture } from "../parking.ts";
 import { TRAIL_ICON, TRAIL_WINDOW_MS, trailEvents, trailPoints, trailSources, trailTime, type HistoryRow } from "../trail.ts";
@@ -119,7 +127,7 @@ import { SHOW_PRESENCE } from "../flags.ts";
 import { hasFeature, manualUrl, projectionOn, released, shopUrl, type Feature } from "../features.ts";
 import { searchIndex, searchItems, type SearchItem } from "../search.ts";
 import type { Shown } from "../voice/targets.ts";
-import { anyModule, moduleAlerts, moduleCards, moduleMenuSheets, modulePools, moduleRoomSheets, moduleScene, moduleSettings, modulesWithSettings, moduleVoice, moduleWatched, syncModules, type ModuleCard, type ModuleField, type ModuleHost, type ModuleSheet, type ScenePiece, type SpokenAlert, type SpokenCar, type SpokenDevice, type SpokenOpening, type VoiceAnswer } from "../modules.ts";
+import { anyModule, moduleAlerts, moduleCards, moduleMenuSheets, modulePools, moduleRoomSheets, moduleScene, moduleSettings, modulesWithSettings, moduleVoice, moduleWatched, modulePopups, syncModules, type ModuleCard, type ModuleField, type ModuleHost, type ModuleSheet, type PopupSection, type ScenePiece, type SpokenAlert, type SpokenCar, type SpokenDevice, type SpokenOpening, type VoiceAnswer } from "../modules.ts";
 import { lineFlows, majorOnly, markerEmoji, markerPath, sparkPoints } from "../module-scene.ts";
 import { generateWalls, openingHost, placeWallPlate, pointOnRoomEdge, type Wall } from "../geometry/walls.ts";
 import { signedArea } from "../model.ts";
@@ -129,13 +137,13 @@ import { load3d } from "../load3d.ts";
 import { loadFun } from "../load-fun.ts";
 import { detectionKind, scaleGlow, buildMarkers, cameraMotionSensors, openMoreInfo, setCameraSensors, stateText, toggleEntity } from "../markers.ts";
 import { activeSections, roofUnderAt, sectionAbove, sectionCutsBelow } from "../roof-sections.ts";
-import { centroid, furnitureFootprint, gangEntities, gangsOf, GANG_TYPES, TECH_TYPES, isLamp, setTerrain, poolFloorY, LAMP_MODEL, LIFT_SPOTS, outdoorGround, pointInPolygon, poolWaterY, spotDepth, surfaceHeight, zonesOf, type Building, type Floor, type Furniture, type Pet, type StartView } from "../model.ts";
+import { centroid, furnitureFootprint, gangEntities, gangsOf, GANG_TYPES, STAIR_TYPES, TECH_TYPES, isLamp, setTerrain, poolFloorY, LAMP_MODEL, LIFT_SPOTS, outdoorGround, pointInPolygon, poolWaterY, spotDepth, surfaceHeight, zonesOf, type Building, type Floor, type Furniture, type Pet, type StartView } from "../model.ts";
 
 import { pathLength, pipePath, pointAlong, type P3 } from "../geometry/runs.ts";
 import { pipePieces, poolAreas, poolNodeAt, poolWallNormal, underBasin, PIPE_IDLE, type PipePiece } from "../pool-runs.ts";
 import type { PipeTube } from "../viewer/viewer3d.ts";
 import type { PoolPiece } from "../viewer/pool-water.ts";
-import { lowSyncDelay } from "../viewer/pace.ts";
+import { lowSyncDelay, MOVE_SYNC_MS } from "../viewer/pace.ts";
 import { floorCounts, floorInfoText, locatedPersons, personLook, personsInRooms, personsShown } from "../presence.ts";
 import { controls, tokens } from "../styles.ts";
 import type { HassEntity, HomeAssistant } from "../types.ts";
@@ -146,7 +154,10 @@ import { wallLayout } from "../camera-wall.ts";
 import { watchedEntities } from "../watched.ts";
 import { backdropCss } from "../backdrop.ts";
 import { loadVoice, micProbeAsked, micProbeDone, voiceArea, voicePipeline } from "../load-voice.ts";
-import { answerAsk, subscribeAsk, type Ask, type ScreenAnnouncement } from "../api.ts";
+import { callCount, cleaningCall, everythingOff, roomOfArea } from "../room-actions.ts";
+import { deviceLabel } from "../screen-info.ts";
+import { FRONTEND_VERSION } from "../building-controller.ts";
+import { answerAsk, subscribeAsk, type Ask, type ScreenAnnouncement, type ScreenReload, type ScreenStyle } from "../api.ts";
 import { pipePlanner } from "../pipe-planner.ts";
 import type { ClockPos } from "../card-config.ts";
 import { Director, HOLD_DEFAULT, directorAny, doorbellCamera, doorbellEntities, doorbellRang, triggerFired, type DirectorSettings, type Shot } from "../director.ts";
@@ -207,8 +218,16 @@ function roofWindowState(hass: HomeAssistant, w: RoofWindow): { open: number; ti
 }
 
 
+/** The plan as the 3D view draws it: everything but the card templates, which only the dashboard cards read. */
+function planKey(b: Building): string {
+  const { card_templates: _templates, ...house } = b;
+  return JSON.stringify(house);
+}
+
 /** Announcements this page already said (a card and the panel both listen). */
 const heardAnnouncements = new Set<string>();
+/** Calls to load again already followed (a card and the panel on one page reload once). */
+const reloadsAsked = new Set<string>();
 
 /** A soft two-tone gong before an announcement; silent where the browser does not let the page play sound yet. */
 async function chime(): Promise<void> {
@@ -243,16 +262,25 @@ export class Fp3dView3d extends LitElement {
   static properties = {
     hass: { attribute: false },
     building: { attribute: false },
+    planId: { attribute: false },
+    // compared by content: the card hands a new array on every render, and a "change" would reset the view (#956)
+    rooms: { attribute: false, hasChanged: (a: string[] | null, b: string[] | null) => (a ?? []).join(",") !== (b ?? []).join(",") },
+    noSave: { attribute: false },
     floorId: { attribute: false },
     roomId: { attribute: false },
     wallMode: { attribute: false },
     explode: { type: Boolean },
     keepRoof: { attribute: false },
+    plain: { attribute: false },
     markerMode: { attribute: false },
     pinSize: { attribute: false },
     markerNames: { attribute: false },
     heatMode: { attribute: false },
     theme: { attribute: false },
+    themeEvening: { attribute: false },
+    themeNight: { attribute: false },
+    styleEntity: { attribute: false },
+    _styleOverride: { state: true },
     clock: { attribute: false },
     _clockTick: { state: true },
     accent: { attribute: false },
@@ -266,6 +294,7 @@ export class Fp3dView3d extends LitElement {
     trail: { type: Boolean },
     cameraWall: { attribute: false },
     weather: { type: Boolean },
+    sunFx: { attribute: false },
     weatherEntityId: { attribute: false },
     _flash: { state: true },
     _proHint: { state: true },
@@ -290,6 +319,7 @@ export class Fp3dView3d extends LitElement {
     _swipe: { state: true },
     _menu: { state: true },
     _through: { state: true },
+    _camPop: { state: true },
     _blend: { state: true },
     _wallBig: { state: true },
     _find: { state: true },
@@ -300,6 +330,8 @@ export class Fp3dView3d extends LitElement {
     ghostOn: { attribute: false },
     _central: { state: true },
     _sheet: { state: true },
+    _popup: { state: true },
+    popupValues: { state: true },
     _settingsOpen: { state: true },
     _note: { state: true },
     _thumbsCompact: { state: true },
@@ -322,6 +354,8 @@ export class Fp3dView3d extends LitElement {
     hideRoof: { attribute: false },
     voice: { attribute: false },
     screen: { attribute: false },
+    template: { attribute: false },
+    viewKind: { attribute: false },
     voiceArea: { attribute: false },
     _voice: { state: true },
     _announce: { state: true },
@@ -345,6 +379,12 @@ export class Fp3dView3d extends LitElement {
 
   declare hass: HomeAssistant;
   declare building: Building | null;
+  /** The floor plan shown (its saves from the ⚙ menu and modules go there; null: the main plan). */
+  declare planId: string | null;
+  /** Only these rooms (and outdoor areas) are drawn, with their furniture and devices: a card for one room. */
+  declare rooms: string[] | null;
+  /** The building shown is put together (the property of several plans): nothing is saved from here. */
+  declare noSave: boolean;
   /** Time travel: the replayed moment (hass is then the past, read-only); null = live. */
   declare replay: ReplayInfo | null;
   /** Time travel: a tapped device's state at the replayed moment, next to the finger. */
@@ -369,6 +409,8 @@ export class Fp3dView3d extends LitElement {
   declare explode: boolean;
   /** The roof stays while zooming in (no lift, no fade). */
   declare keepRoof: boolean;
+  /** A plain floor plan: walls, doors and stairs, no furniture (the devices stay). */
+  declare plain: boolean;
   declare markerMode: MarkerMode;
   /** How large the device symbols are (D596). */
   declare pinSize: "small" | "normal" | "large";
@@ -377,8 +419,18 @@ export class Fp3dView3d extends LitElement {
   declare heatMode: HeatMode;
   /** Imported furniture packs (a new list rebuilds pack furniture). */
   declare packs: unknown;
-  /** The look; "auto" is Day while the sun is up and Neon at night (D623). */
-  declare theme: Theme | "auto";
+  /**
+   * The look or style: a style id, "auto" (Day while the sun is up and Neon at night, D623) or "house" (the house's
+   * plan for day, evening and night).
+   */
+  declare theme: string;
+  /** A card's own styles for the evening and the night (with `theme` as its day style). */
+  declare themeEvening: string | null;
+  declare themeNight: string | null;
+  /** A helper entity whose state names the style (the card's own; else the house's). */
+  declare styleEntity: string | null;
+  /** A style set from outside for this device (the action `neonplan3d.set_style`, a voice command), until a time. */
+  private declare _styleOverride: { style: string; until: number | null } | null;
   /** Date and time in a corner of the view (D631); null or "off": none. */
   declare clock: ClockPos | null;
   private declare _clockTick: number;
@@ -404,6 +456,8 @@ export class Fp3dView3d extends LitElement {
   declare cameraWall: boolean;
   /** Weather outside: rain, snow, fog and clouds from a weather entity, sun and moon from sun.sun. */
   declare weather: boolean;
+  /** Sun, its arc and the house's shadow (the editor's pane switches them off with its effects). */
+  declare sunFx: boolean;
   /** The weather entity to use (null: the first one). */
   declare weatherEntityId: string | null;
   /** A lightning flash lights the stage for a moment. */
@@ -447,6 +501,8 @@ export class Fp3dView3d extends LitElement {
   private holoFolded = new Set<number>();
   /** Media cards folded by the user, by player (positions shift as players start and stop). */
   private mediaFolded = new Set<string>();
+  /** Module cards that show their minor values also on a narrow card or the tablet level (this device, #1016). */
+  private moduleFull = new Set<string>(readModuleFull());
   /** A module card just opened from its marker (it lights up for a moment). */
   private cardPing: string | null = null;
   private cardPingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -474,7 +530,12 @@ export class Fp3dView3d extends LitElement {
   /** Quick menu at a device (long press). */
   private declare _menu: { entity: string; x: number; y: number; car?: CarState; doorLock?: boolean } | null;
   /** Looking through a camera: its live picture lies over the 3D view; `back` is the view to return to. */
-  private declare _through: { entity: string; back: ReturnType<FloorplanViewer["getView"]> } | null;
+  /** Kamera-Cockpit: the camera whose new detection shows as a pop-up (#442), until when. */
+  private declare _camPop: { entity: string; text: string; until: number; src: string | null } | null;
+  /** Detections already shown as a pop-up (sensor and the moment it went on). */
+  private popSeen = new Set<string>();
+  /** Looking through a camera: which one, the view to go back to, and whether the flight there has arrived. */
+  private declare _through: { entity: string; back: ReturnType<FloorplanViewer["getView"]>; ready?: boolean } | null;
   /** Camera wall: the camera shown big (null: all tiles). */
   private declare _wallBig: string | null;
   /** The look-through was started from the camera wall: going back reopens the wall. */
@@ -518,6 +579,10 @@ export class Fp3dView3d extends LitElement {
   declare voice: boolean;
   /** This view's screen name: a sentence from Assist that names a screen is only for the view with that name. */
   declare screen: string | null;
+  /** The card template this view shows (a dashboard card's option `template`): "reload screens" for it reaches it. */
+  declare template: string | null;
+  /** Where this view runs, for the overview of the open screens: the panel, a dashboard card, a template's preview. */
+  declare viewKind: "panel" | "card" | "preview";
   /** The Home Assistant area of this view's tablet (card option `voice_area`); null: the device's setting. */
   declare voiceArea: string | null;
   private declare _voice: { phase: "wait" | "listen" | "done" | "error"; text: string } | null;
@@ -573,13 +638,17 @@ export class Fp3dView3d extends LitElement {
   private declare _central: boolean;
   /** A module's sheet that is open (an announcement …): from a room's panel (with its room) or from the ⭐ menu. */
   private declare _sheet: { id: string; floorId: string | null; roomId: string | null } | null;
+  /** A module's pop-up that is open (its id), with its auto-close timer and the values typed into its form. */
+  private declare _popup: { id: string } | null;
+  private popupTimer: ReturnType<typeof setTimeout> | undefined;
+  private declare popupValues: Record<string, string>;
   /** The ⚙ settings over the view are open. */
   private declare _settingsOpen: boolean;
   /** A short note at the bottom (a module's "sent"), with its timer. */
   private declare _note: string | null;
   private noteTimer: ReturnType<typeof setTimeout> | undefined;
   /** The people shown in the last sync (for the rooms someone is in). */
-  private lastPersons: { floorId: string; roomId: string }[] = [];
+  private lastPersons: { id: string; floorId: string; roomId: string }[] = [];
   /** A house-wide action waiting for its second tap ("sure?"), with the time it was armed. */
   private declare _armed: string | null;
   private armTimer: ReturnType<typeof setTimeout> | undefined;
@@ -657,6 +726,8 @@ export class Fp3dView3d extends LitElement {
   private fridgeTimer: ReturnType<typeof setTimeout> | undefined;
   /** Tablet level: measured values alone are shown at most every SENSOR_SYNC_MS (the pending sync, the last one). */
   private sensorTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Winter: a look once a minute (night falls, the snow melts, midnight on New Year's Eve). */
+  private winterTimer: ReturnType<typeof setInterval> | undefined;
   /** A module asked to be drawn again (its own state changed: a target just set, a simulation ticking). */
   private moduleTimer: ReturnType<typeof setTimeout> | undefined;
   private lastSync = 0;
@@ -676,6 +747,9 @@ export class Fp3dView3d extends LitElement {
   constructor() {
     super();
     this.building = null;
+    this.planId = null;
+    this.rooms = null;
+    this.noSave = false;
     this.replay = null;
     this._info = null;
     this.floorId = null;
@@ -683,6 +757,7 @@ export class Fp3dView3d extends LitElement {
     this.wallMode = "auto";
     this.explode = true;
     this.keepRoof = false;
+    this.plain = false;
     this.markerMode = "important";
     this.pinSize = "normal";
     this.heatMode = "none";
@@ -693,6 +768,7 @@ export class Fp3dView3d extends LitElement {
     this.furnish = false;
     this.trail = false;
     this.weather = true;
+    this.sunFx = true;
     this.weatherEntityId = null;
     this._flash = false;
     this._proHint = null;
@@ -723,6 +799,8 @@ export class Fp3dView3d extends LitElement {
     this._sheet = null;
     this._settingsOpen = false;
     this._note = null;
+    this._popup = null;
+    this.popupValues = {};
     try {
       this._thumbsCompact = localStorage.getItem("neonplan3d.thumbs_compact") === "1";
     } catch {
@@ -754,6 +832,8 @@ export class Fp3dView3d extends LitElement {
     this.hideRoof = false;
     this.voice = false;
     this.screen = null;
+    this.template = null;
+    this.viewKind = "panel";
     this.voiceArea = null;
     this._voice = null;
     this._micProbe = micProbeAsked();
@@ -791,6 +871,12 @@ export class Fp3dView3d extends LitElement {
       this.watchTrail();
     }
     document.addEventListener("visibilitychange", this.onVisible);
+    try {
+      const kept = JSON.parse(localStorage.getItem(STYLE_OVERRIDE_KEY) ?? "null") as { style: string; until: number | null } | null;
+      this._styleOverride = kept && (kept.until === null || kept.until > Date.now()) && styleById(kept.style) ? kept : null;
+    } catch {
+      this._styleOverride = null;
+    }
     this.watchAsk();
   }
 
@@ -802,11 +888,21 @@ export class Fp3dView3d extends LitElement {
       hass,
       (ask) => void this.onAsk(ask),
       (a) => void this.onAnnounce(a),
-    ).catch(() => {
+      (r) => this.onReload(r),
+      (st) => this.onStyle(st),
+      this.viewInfo(),
+    )
+      // a backend older than this page (not restarted after an update) knows no style channel: without it, then
+      .catch(() => subscribeAsk(hass, (ask) => void this.onAsk(ask), (a) => void this.onAnnounce(a), (r) => this.onReload(r), undefined, this.viewInfo()))
+      .catch(() => {
       // a replay or an older backend: nothing to listen to
       this.unsubAsk = null;
       return async () => {};
     });
+  }
+
+  private viewInfo() {
+    return { kind: this.viewKind, screen: this.screen, template: this.template, device: deviceLabel(), version: FRONTEND_VERSION, ...(this.planId && this.planId !== MAIN_PLAN ? { plan: this.planId } : {}) };
   }
 
   private unwatchAsk(): void {
@@ -830,6 +926,7 @@ export class Fp3dView3d extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.watchWinter(false);
     document.removeEventListener("visibilitychange", this.onVisible);
     this.stopWalk();
     this.pets?.dispose();
@@ -955,7 +1052,7 @@ export class Fp3dView3d extends LitElement {
       this.viewer.setWallMode(this.wallMode);
       this.viewer.setKeepView(this.keepView);
       this.viewer.setAngleLock(this.angleLock);
-      this.viewer.setTheme(this.effectiveTheme());
+      this.viewer.setStyle(this.effectiveStyle());
       this.viewer.setAccent(this.accent ?? null);
       this.viewer.setFurnishMode(this.furnish);
       this.viewer.setSurfaceGrab(this.surfaceGrab ?? null);
@@ -974,7 +1071,7 @@ export class Fp3dView3d extends LitElement {
       if (this.building) {
         this.shownStartView = JSON.stringify(this.startViewOf());
         this.viewer.setStartView(this.startViewOf());
-        this.viewer.setBuilding(this.building);
+        this.viewer.setBuilding(this.shownBuilding()!);
       }
       this.scheduleThumbs();
       this.syncDevices(true);
@@ -1001,7 +1098,11 @@ export class Fp3dView3d extends LitElement {
 
   protected updated(changed: PropertyValues): void {
     if (changed.has("hass") && this.live?.el) this.live.el.hass = this.hass;
-    if (changed.has("hass")) this.watchAsk();
+    // a view that now shows another screen name or template tells the overview again
+    if ((changed.has("screen") || changed.has("template") || changed.has("viewKind") || changed.has("planId")) && this.unsubAsk && this.hasUpdated) {
+      this.unwatchAsk();
+      this.watchAsk();
+    } else if (changed.has("hass")) this.watchAsk();
     // the star menu closes when a room or another floor is chosen (#220)
     if (this._central && ((changed.has("roomId") && changed.get("roomId") !== undefined) || (changed.has("floorId") && changed.get("floorId") !== undefined))) this._central = false;
     const v = this.viewer;
@@ -1011,6 +1112,8 @@ export class Fp3dView3d extends LitElement {
       if (this.floorId === this.throughFloor) this.throughFloor = null;
       else this._through = null;
     }
+    // however the look through a camera ended, the view gets its own field of view back
+    if (changed.has("_through") && !this._through && changed.get("_through")) v.endLook();
     // packs arrive with the building (or after an import): the viewer rebuilds pack furniture
     if (this.shownPacks !== packsVersion()) {
       this.shownPacks = packsVersion();
@@ -1021,14 +1124,29 @@ export class Fp3dView3d extends LitElement {
       // a feature pack may have arrived with them (Energie Pro): the cables and modules follow
       this.syncDevices(true);
     }
-    if (changed.has("building") && this.building) {
+    // a plan that changed only in its card templates (edited for the wall tablets) is the same house: nothing is built again
+    const drawn = changed.has("building") && this.building ? planKey(this.building) : this.drawnPlan;
+    const sameHouse = changed.has("building") && drawn === this.drawnPlan;
+    this.drawnPlan = drawn;
+    if (changed.has("building") && this.building && !sameHouse) {
       // a new start view (just remembered in the editor) shows right away in the house view
       const start = JSON.stringify(this.startViewOf());
       const startChanged = this.shownStartView !== undefined && this.shownStartView !== start;
       this.shownStartView = start;
       v.setStartView(this.startViewOf());
-      v.setBuilding(this.building);
+      v.setBuilding(this.shownBuilding()!);
       if (startChanged && this.floorId === null) v.resetView();
+    } else if (((changed.has("plain") && changed.get("plain") !== undefined) || (changed.has("rooms") && changed.get("rooms") !== undefined)) && this.building) {
+      v.setBuilding(this.shownBuilding()!);
+      if (changed.has("rooms")) {
+        this.syncDevices(true);
+        v.resetView();
+      }
+    }
+    // a piece's condition came true or false: the furniture is drawn again (only then, not on every state change)
+    else if (changed.has("hass") && this.building && showIfSignature(this.hass, this.building) !== this.shownSig) {
+      v.setBuilding(this.shownBuilding()!);
+      this.syncDevices(true);
     }
     if (changed.has("building") || changed.has("packs") || changed.has("petsOn")) void this.syncPets();
     if (changed.has("building") || changed.has("packs") || changed.has("ghostOn")) void this.syncGhost();
@@ -1056,7 +1174,10 @@ export class Fp3dView3d extends LitElement {
     if (changed.has("keepRoof")) v.setKeepRoof(this.keepRoof);
     if (changed.has("hideRoof")) v.setHideRoof(this.hideRoof);
     if (changed.has("floorStack")) v.setFloorStack(this.floorStack);
-    if (changed.has("theme")) v.setTheme(this.effectiveTheme());
+    // the newest setting wins: a style chosen anew for this screen (device, card, template) ends one set by voice or an action
+    const restyled = (["theme", "themeEvening", "themeNight"] as const).some((k) => changed.has(k) && changed.get(k) !== undefined);
+    if (restyled && this._styleOverride) this.setStyleOverride("reset", null);
+    if (changed.has("theme") || changed.has("themeEvening") || changed.has("themeNight") || changed.has("styleEntity") || changed.has("_styleOverride") || changed.has("building")) v.setStyle(this.effectiveStyle());
     if (changed.has("accent")) v.setAccent(this.accent ?? null);
     if (changed.has("surfaceGrab")) v.setSurfaceGrab(this.surfaceGrab ?? null);
     if (changed.has("furnishTypes")) v.setFurnishTypes(this.furnishTypes ?? null);
@@ -1083,6 +1204,15 @@ export class Fp3dView3d extends LitElement {
     if (changed.has("building")) this.findIndex = null;
   }
 
+  /** Winter: what comes with the time of day and the year is looked at once a minute while the pack is there. */
+  private watchWinter(on: boolean): void {
+    if (on && !this.winterTimer) this.winterTimer = setInterval(() => this.syncDevices(false, true), 60_000);
+    else if (!on && this.winterTimer) {
+      clearInterval(this.winterTimer);
+      this.winterTimer = undefined;
+    }
+  }
+
   /**
    * Send device markers, door/window states, energy cables, people and floor label texts to the viewer
    * when a watched entity changed (or the building). Openings are matched with entities again when
@@ -1090,7 +1220,8 @@ export class Fp3dView3d extends LitElement {
    */
   private syncDevices(force: boolean, timed = false): void {
     const v = this.viewer;
-    const b = this.building;
+    // pieces hidden by their condition have no light or pin either
+    const b = this.conditioned();
     if (!v || !b || !this.hass) return;
     const hass = this.hass;
     if (force || !this.openingLinks || this.linkedRegistry !== hass.entities) {
@@ -1109,6 +1240,11 @@ export class Fp3dView3d extends LitElement {
         weatherEntityId: this.weatherEntityId,
       });
       if (anyModule()) this.watched = [...new Set([...this.watched, ...moduleWatched(this.sceneHost(hass, b))])];
+      // winter: the fairy lights' own switch and the weather that brings the snow
+      if (hasFeature("fun_winter")) {
+        const extra = [winterOf(b).roof_entity, weatherEntity(hass, this.weatherEntityId ?? b.settings.weather_entity), "sun.sun"].filter((id): id is string => !!id);
+        this.watched = [...new Set([...this.watched, ...extra])];
+      }
       force = true;
     }
     let changed = force || timed;
@@ -1129,6 +1265,14 @@ export class Fp3dView3d extends LitElement {
     this.seenSeek = this.replay?.seek ?? 0;
     this.seenT = this.replay?.t ?? 0;
     if (!changed) return;
+    // while the view is turned, new states wait until it rests: a sync took whole frames on a slow tablet (#952)
+    if (!force && !this.replay && v.cameraBusy()) {
+      this.sensorTimer ??= setTimeout(() => {
+        this.sensorTimer = undefined;
+        this.syncDevices(false);
+      }, MOVE_SYNC_MS);
+      return;
+    }
     // tablet level: a change of measured values alone is shown at most every 2 s (power sensors tick every second
     // and each sync redoes markers, light, cables and cards); a switch, door or alarm shows at once
     if (sensorsOnly && this._low && !this.replay) {
@@ -1423,7 +1567,8 @@ export class Fp3dView3d extends LitElement {
         const members = Array.isArray(a.group_members) ? (a.group_members as string[]).filter((m) => m !== id) : [];
         sound.push({ id, floorId: floor.id, x, z, level: playing ? 0.3 + 0.7 * vol : 0, playing, members });
         const title = label || translate(hass, "holo_media_playing");
-        const anchor = { p: [x, floor.elevation + top + 0.12, z] as [number, number, number], n: [0, 1, 0] as [number, number, number], floorId: floor.id, size: holoSize * 0.7, roof: false, views: "all" as const };
+        // with its room: an opened room shows the speaker playing in it, not only the floor (#911)
+        const anchor = { p: [x, floor.elevation + top + 0.12, z] as [number, number, number], n: [0, 1, 0] as [number, number, number], floorId: floor.id, size: holoSize * 0.7, roof: false, views: "all" as const, room: roomAt(floor, x, z) };
         const card: HoloCard = {
           kind: "media",
           name,
@@ -1583,25 +1728,35 @@ export class Fp3dView3d extends LitElement {
     const pool = this.poolPipes(b);
     // a module's lines (pipes, a loop in the ground) flow in the same layer; its surfaces lie over floors and lawns
     const lines = this.scene.filter((p): p is Extract<ScenePiece, { kind: "line" }> => p.kind === "line");
+    // fun pack "Winter & Christmas": fairy lights along the eaves, snow on roof and lawn, the New Year's firework
+    const winter = hasFeature("fun_winter") && !this.replay;
+    v.setRoofLights(winter && roofLightsOn(hass, b) ? (winterOf(b).roof_color ? "color" : "warm") : "off", winterOf(b).roof_outline !== false);
+    const snow = winter ? snowLevel(hass, b, weatherEntity(hass, this.weatherEntityId ?? b.settings.weather_entity)) : 0;
+    v.setRoofSnow(snow);
+    v.setFirework(winter && fireworkNow(b));
+    this.watchWinter(winter);
     v.setFlows(this.dimmed ? energyFlows : [...energyFlows, ...pool.flows, ...lineFlows(lines)]);
     v.setPipes(pool.tubes);
-    v.setPatches(this.scene.filter((p): p is Extract<ScenePiece, { kind: "patch" }> => p.kind === "patch").map((p) => ({ floorId: p.floorId, points: p.points, y: p.y, color: p.color, opacity: this.dimmed ? p.opacity * 0.4 : p.opacity, ...(p.glow ? { glow: true } : {}) })));
+    v.setPatches([
+      ...this.scene.filter((p): p is Extract<ScenePiece, { kind: "patch" }> => p.kind === "patch").map((p) => ({ floorId: p.floorId, points: p.points, y: p.y, color: p.color, opacity: this.dimmed ? p.opacity * 0.4 : p.opacity, ...(p.glow ? { glow: true } : {}) })),
+      ...lawnSnow(b, snow),
+    ]);
     const roomSensors = SHOW_PRESENCE ? personsInRooms(hass, b) : [];
     const persons = released("locate") && personsShown(b) ? [...roomSensors, ...locatedPersons(hass, b, new Set(roomSensors.map((p) => p.id)))] : roomSensors;
     v.setPersonLook(personLook(b) === "pin" ? "pin" : "figure");
     v.setPersons(persons);
-    this.lastPersons = persons.map((p) => ({ floorId: p.floorId, roomId: p.roomId }));
+    this.lastPersons = persons.map((p) => ({ id: p.id, floorId: p.floorId, roomId: p.roomId }));
     const counts = floorCounts(hass, b, this.openingLinks!, persons);
     v.setFloorInfo(new Map([...counts].map(([id, c]) => [id, floorInfoText(hass, c)])));
     // daylight: sun through the windows and a lighter sky
     const sun = hass.states["sun.sun"]?.attributes;
     const elevation = typeof sun?.elevation === "number" ? sun.elevation : null;
-    v.setSun(elevation !== null && typeof sun?.azimuth === "number" ? { elevation, azimuth: sun.azimuth } : null);
+    v.setSun(this.sunFx !== false && elevation !== null && typeof sun?.azimuth === "number" ? { elevation, azimuth: sun.azimuth } : null);
     // the compass ring's letters: the first letter of each direction in the user's language
     const letter = (k: I18nKey) => translate(hass, k).charAt(0).toUpperCase();
-    v.setSunPath(this.sunPathToday(hass), [letter("compass_n"), letter("compass_e"), letter("compass_s"), letter("compass_w")], hourCycle(hass));
-    // the automatic look follows the sun (setTheme ignores a look it already shows)
-    if (this.theme === "auto") v.setTheme(this.effectiveTheme());
+    v.setSunPath(this.sunFx === false ? null : this.sunPathToday(hass), [letter("compass_n"), letter("compass_e"), letter("compass_s"), letter("compass_w")], hourCycle(hass));
+    // the style follows the sun, the clock and the helper entity (setStyle ignores a style it already shows)
+    v.setStyle(this.effectiveStyle());
     // the weather outside: clouds darken the sky, rain, snow and fog fall over the plot
     const raw = this.weather && !this.dimmed && hasFeature("weather") ? weatherState(hass, weatherEntity(hass, this.weatherEntityId ?? b.settings.weather_entity), b.settings.rain_entity) : null;
     const weather = raw ? limitEffects(raw, b.settings.weather_effects) : null;
@@ -1776,7 +1931,9 @@ export class Fp3dView3d extends LitElement {
     const out: (DeviceMarker & { pin: boolean })[] = [];
     // cameras whose detection pins are switched off: only their wedge turns red (#267)
     const quiet = new Set(this.building?.floors.flatMap((f) => f.placements.filter((p) => p.detect_pins === false).map((p) => p.entity_id)) ?? []);
+    const popups = new Set(this.building?.floors.flatMap((f) => f.placements.filter((p) => p.detect_popup).map((p) => p.entity_id)) ?? []);
     for (const cam of markers) {
+      if (popups.has(cam.id) && cam.model?.startsWith("camera")) this.popOnDetection(hass, cam.id);
       if (!cam.model?.startsWith("camera") || quiet.has(cam.id)) continue;
       // a detection stays as a pin for two minutes after the sensor dropped back (Reolink and the like hold it
       // only for seconds), with the time it was seen
@@ -2245,8 +2402,20 @@ export class Fp3dView3d extends LitElement {
       this.requestUpdate();
     };
     const styled = (color?: string) => (color ? `color:${color}` : "");
-    // the tablet level and narrow screens leave the minor parts out
-    const compact = this._low || this.clientWidth < 600;
+    // the tablet level and narrow screens leave the minor parts out – unless asked for with "more" on the card (#1016)
+    const narrow = this._low || this.clientWidth < 600;
+    const compact = narrow && !this.moduleFull.has(m.id);
+    const minors = narrow && [...(m.rows ?? []), ...(m.cells ?? []), ...(m.chain?.items ?? []), ...(m.spark ? [m.spark] : [])].some((x) => x.minor);
+    const more = () => {
+      if (this.moduleFull.has(m.id)) this.moduleFull.delete(m.id);
+      else this.moduleFull.add(m.id);
+      try {
+        localStorage.setItem(MODULE_FULL_KEY, JSON.stringify([...this.moduleFull]));
+      } catch {
+        // private window: for this page only
+      }
+      this.requestUpdate();
+    };
     const rows = majorOnly(m.rows, compact);
     const cells = majorOnly(m.cells, compact);
     const chain = m.chain ? majorOnly(m.chain.items, compact) : [];
@@ -2296,6 +2465,9 @@ export class Fp3dView3d extends LitElement {
                     <div class="fp3d-holo-chip-row">${g.items.map((c) => html`<button class=${c.on ? "fp3d-holo-on" : ""} title=${c.title ?? ""} @click=${() => c.onTap()}>${c.label}</button>`)}</div>`,
                 )}
               </div>`
+            : nothing}
+          ${open && minors
+            ? html`<button class="fp3d-holo-more" @click=${more}>${translate(this.hass, compact ? "holo_more" : "holo_less")}</button>`
             : nothing}
           ${open && !this.ro && m.buttons?.length
             ? html`<div class="fp3d-holo-media-controls fp3d-holo-car-controls">${m.buttons.map((bt) => html`<button class=${bt.on ? "fp3d-holo-on" : ""} title=${bt.title ?? ""} @click=${() => bt.onTap()}>${bt.label}</button>`)}</div>`
@@ -2891,7 +3063,8 @@ export class Fp3dView3d extends LitElement {
         const autoPro = f.type === "parking" && hasFeature("auto_pro") && !!f.car;
         const car = autoPro ? carState(hass, f) : null;
         // Haushalt Pro: a washer with only its time left still gets its pin
-        const appliance = f.type === "washer" || f.type === "dryer" || f.type === "dishwasher";
+        const applianceKind = applianceOf(f.type);
+        const appliance = !!applianceKind;
         const extraRef = f.type === "home_battery" ? f.soc : f.type === "wallbox" ? f.status : f.type === "parking" && car ? (f.car?.device ?? car.entities.soc) : household && appliance ? (f.remaining ?? null) : null;
         const extra = extraRef && extraRef !== "none" ? extraRef : null;
         // a sensor whose value stands at the symbol (a boiler's water temperature, D619): a pin even without a link
@@ -2936,7 +3109,7 @@ export class Fp3dView3d extends LitElement {
           const name = f.name || (link.entity ? entityName(hass, link.entity) : furnitureName(hass, f.type));
           if (busy) {
             // running by its time left alone: it glows like one that draws power
-            if (!running) screens.set(f.id, runGlow(f.type));
+            if (!running) screens.set(f.id, runGlow(applianceKind!));
             // a time left only while it runs: its plug or status off, or standby power, make it a leftover on the
             // display sensor (after a power cut)
             if (min !== null && !applianceIdle(st, link.power ? power : null, runW)) {
@@ -2979,8 +3152,8 @@ export class Fp3dView3d extends LitElement {
         } else if (f.type === "ac_unit" && st && kindOf(st.entity_id) === "climate") {
           const glow = climateModeGlow(st);
           if (glow) screens.set(f.id, glow);
-        } else if ((f.type === "washer" || f.type === "dryer" || f.type === "dishwasher") && running) {
-          screens.set(f.id, runGlow(f.type));
+        } else if (applianceKind && running) {
+          screens.set(f.id, runGlow(applianceKind));
         } else if (f.type === "stove" || isPackCooktop(f.type)) {
           // the burners glow while it cooks (or draws power), faintly while it is ready
           const level = cooktopLevel(st, running);
@@ -3092,7 +3265,14 @@ export class Fp3dView3d extends LitElement {
     // a module's band of light round an item, or its layers (a tank warm above, cool below): on any item, over its own glow
     for (const g of glows.values()) {
       if (g.top) screens.set(g.furnitureId, { color: g.color, level: g.level, faces: [{ part: "strata", color: g.color, top: g.top, level: g.level }] });
+      else if (g.plate) screens.set(g.furnitureId, { color: g.color, level: g.level, faces: [{ part: "plate", color: g.color, level: g.level }] });
       else if (g.band) screens.set(g.furnitureId, { color: g.color, level: g.level, faces: [{ part: "band", color: g.color, level: g.level }] });
+    }
+    // a module's picture on an item's screen face (a frame, a display); a tap may open the module's pop-up
+    for (const sp of this.scene) {
+      if (sp.kind !== "screen") continue;
+      screens.set(sp.furnitureId, { color: sp.color ?? [0.06, 0.08, 0.14], level: sp.level ?? 1, picture: sp.picture, plain: true });
+      if (sp.popup) targets.set(sp.furnitureId, `popup:${sp.popup}`);
     }
     this.watchCameras(this.cameraScreens > 0 || !!this._through || this.cameraWall || this.projecting);
     return { markers, consumers, screens, targets };
@@ -3684,12 +3864,13 @@ export class Fp3dView3d extends LitElement {
       x: f.x,
       z: f.z,
       y,
-      icon: iconSvg("light"),
+      // an own symbol wins over the lamp's (#1005)
+      icon: f.icon ? mdiIcon(f.icon) : iconSvg("light"),
       name: f.name || (entity ? entityName(hass, entity) : furnitureName(hass, f.type)),
       text: st ? stateText(hass, st) : "",
       active: st ? isActive(st) : false,
       unavailable: st ? isUnavailable(st) : false,
-      glow: st ? scaleGlow(onlyColor(lightGlow(st, f.color_entity && f.color_entity !== "none" ? hass.states[f.color_entity] : undefined), f.only_color), f.glow_scale) : null,
+      glow: st ? scaleGlow(fixedGlowColor(onlyColor(lightGlow(st, f.color_entity && f.color_entity !== "none" ? hass.states[f.color_entity] : undefined), f.only_color), f.glow_color), f.glow_scale) : null,
       lamp: model,
       rotation: f.rotation,
       mirror: !!f.mirror,
@@ -3706,8 +3887,15 @@ export class Fp3dView3d extends LitElement {
       pack: item ? f.type : null,
       lightY: item ? (item.mount === "ceiling" ? base : base + f.h * 0.85) : undefined,
       // a running colour effect – not a "mode" some integrations report as their effect (LocalTuya: "white",
-      // "colour"; others "manual", "default", an empty one)
-      effect: !!st && st.state === "on" && typeof st.attributes.effect === "string" && !/^(none|off|solid|static|normal|white|colou?r|rgb|manual|default|-|)$/i.test(st.attributes.effect.trim()),
+      // "colour"; others "manual", "default", an empty one), not a mood of a white-only light, and never while the
+      // lamp has a fixed colour (#977)
+      effect:
+        !!st &&
+        st.state === "on" &&
+        !f.glow_color &&
+        colorCapable(st) &&
+        typeof st.attributes.effect === "string" &&
+        !/^(none|off|solid|static|normal|white|colou?r|rgb|manual|default|-|)$/i.test(st.attributes.effect.trim()),
       variant: f.variant,
       show: f.marker ?? undefined,
       fromFurniture: true,
@@ -3728,10 +3916,14 @@ export class Fp3dView3d extends LitElement {
   }
 
   private showPin(m: DeviceMarker & { fromFurniture?: boolean; energyDevice?: boolean }): boolean {
+    // a lamp without a light is drawn but switches nothing: no pin, whatever the mode (#982)
+    if (m.id.startsWith("lamp:")) return false;
     // while furnishing every placed device has a pin to grab it by
     if (this.furnish && !m.fromFurniture) return true;
     // the device's own setting wins over the marker mode (except "none", which hides every marker)
     if (m.show === "never" || this.markerMode === "none") return false;
+    // "only while active" (#337): the pin of a door contact or a plug shows while it is open or on, whatever the mode
+    if (m.show === "active") return m.active;
     if (m.show === "always" || this.markerMode === "all") return true;
     // only in rooms: none in the house and floor views, in an open room every symbol of that room (D477)
     if (this.markerMode === "room") return this.inOpenRoom(m);
@@ -4099,17 +4291,24 @@ export class Fp3dView3d extends LitElement {
    * biggest) and walks – dragging looks around, a tap on the floor walks there through the doors, keys or the
    * stick move; walls stop you. The house lives on around you: lights, screens, sunlight.
    */
+  /** The walk from the room open in the panel (its 🚶 button, #950). */
+  walkHere(): void {
+    void this.startWalk();
+  }
+
   private async startWalk(): Promise<void> {
     countView("walk");
     const b = this.building;
     const v = this.viewer;
     if (!b || !v || this._walk) return;
+    const roomId = this.roomId;
     const withRooms = b.floors.filter((f) => f.rooms.some((r) => r.points.length >= 3));
-    const byRoom = this.roomId ? withRooms.find((f) => f.rooms.some((r) => r.id === this.roomId)) : undefined;
+    const byRoom = roomId ? withRooms.find((f) => f.rooms.some((r) => r.id === roomId)) : undefined;
     const floor = byRoom ?? withRooms.find((f) => f.id === this.floorId) ?? [...withRooms].sort((x, y) => Math.abs(x.elevation) - Math.abs(y.elevation))[0];
     if (!floor) return;
     const mod = await load3d();
     this._walk = { room: null, hint: true };
+    this.walkChanged(true);
     await this.updateComplete;
     const surface = this.renderRoot.querySelector<HTMLElement>(".fp3d-walk-surface");
     if (!surface) return;
@@ -4117,7 +4316,7 @@ export class Fp3dView3d extends LitElement {
     v.setFloor(floor.id, false);
     v.setWallMode("auto");
     const map = new mod.FloorMap(b, floor);
-    const room = this.roomId ? floor.rooms.find((r) => r.id === this.roomId) : undefined;
+    const room = roomId ? floor.rooms.find((r) => r.id === roomId) : undefined;
     let start;
     if (room) {
       const c = map.freeNear(centroid(room.points));
@@ -4141,6 +4340,11 @@ export class Fp3dView3d extends LitElement {
     }, 9000);
   }
 
+  /** The host hides its room panel while one walks (the room stays chosen, so the view does not fly away). */
+  private walkChanged(walking: boolean): void {
+    this.dispatchEvent(new CustomEvent("walk-change", { detail: { walking }, bubbles: true, composed: true }));
+  }
+
   private stopWalk(): void {
     if (!this.walker && !this._walk) return;
     this.walker?.dispose();
@@ -4149,6 +4353,7 @@ export class Fp3dView3d extends LitElement {
     this.walkKeys = null;
     this._walk = false;
     this.walkRoomPts = null;
+    this.walkChanged(false);
     const v = this.viewer;
     if (v) {
       v.setWallMode(this.wallMode);
@@ -4160,6 +4365,8 @@ export class Fp3dView3d extends LitElement {
   private renderWalk() {
     if (!this.walkable || this.ro || !this.building || !this.hass) return nothing;
     const t = (k: I18nKey) => translate(this.hass, k);
+    // a room's panel sits where the button would be (top right): the walk starts again once it is closed
+    if (!this._walk && this.panelOpen) return nothing;
     if (!this._walk)
       return html`<button class="fp3d-walk-btn" title=${t("walk_start")} aria-label=${t("walk_start")} @click=${() => void this.startWalk()}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13" cy="4.5" r="1.8" /><path d="m9 20 2.5-6 2.5 2.5V21M7.5 11l3-3.5 3.5 1.5 2 3.5M11.5 14l1-5" /></svg>
@@ -4283,6 +4490,11 @@ export class Fp3dView3d extends LitElement {
         return;
       }
       this._armed = null;
+      // covers each the way it can: slat-only blinds by their tilt (#920)
+      if (domain === "cover" && (service === "open_cover" || service === "close_cover")) {
+        for (const c of coverCalls(hass, ids, service === "open_cover" ? "open" : "close")) void hass.callService("cover", c.service, c.data);
+        return;
+      }
       void hass.callService(domain, service, { entity_id: ids });
     };
     const button = (key: string, label: I18nKey, domain: string, service: string, ids: string[]) =>
@@ -4493,6 +4705,64 @@ export class Fp3dView3d extends LitElement {
     }
   }
 
+  /**
+   * The editor's "Reload screens" (or the service): the views of these templates, or every view, load the page again –
+   * a few seconds apart, so a house full of tablets does not ask Home Assistant all at once. A card and the panel on
+   * one page load it once.
+   */
+  private onReload(r: ScreenReload): void {
+    // templates belong to their floor plan: a reload for another plan's templates is not meant here
+    if (r.plan && r.plan !== (this.planId ?? MAIN_PLAN)) return;
+    if (r.templates.length && !(this.template && r.templates.includes(this.template))) return;
+    if (reloadsAsked.has(r.id)) return;
+    reloadsAsked.add(r.id);
+    // the editor on this page sent it: the admin's own page stays
+    if (Date.now() - ((window as { fp3dReloadSent?: number }).fp3dReloadSent ?? 0) < 15000) return;
+    // say so, or someone at the tablet taps around while it waits
+    this._announce = translate(this.hass, "screen_reloading");
+    setTimeout(() => location.reload(), 500 + Math.random() * 4000);
+  }
+
+  /** The room open in the view (tapped into), with its floor. */
+  private openRoom(b: Building): { floor: Floor; room: NonNullable<ReturnType<typeof zonesOf>[number]> } | null {
+    if (!this.roomId) return null;
+    for (const floor of b.floors) {
+      const room = zonesOf(floor).find((r) => r.id === this.roomId);
+      if (room) return { floor, room };
+    }
+    return null;
+  }
+
+  /**
+   * A room action by voice: the room named, "there" (open in the view), "here" (where the tablet hangs), or without
+   * either the tablet's room, else the open one. What to say back.
+   */
+  private async roomAction(hass: HomeAssistant, b: Building, intent: { action: "clean" | "off"; room: { floorId: string; roomId: string } | "here" | "there" | null }): Promise<string> {
+    const here = () => roomOfArea(b.floors, this.voiceArea ?? voiceArea());
+    const named = (id: { floorId: string; roomId: string }) => {
+      const floor = b.floors.find((f) => f.id === id.floorId);
+      const room = floor && zonesOf(floor).find((r) => r.id === id.roomId);
+      return floor && room ? { floor, room } : null;
+    };
+    const target =
+      intent.room === "there" ? this.openRoom(b) : intent.room === "here" ? here() : intent.room ? named(intent.room) : (here() ?? this.openRoom(b));
+    if (!target) return translate(hass, intent.room === "there" ? "voice_noroom_open" : "voice_noroom");
+    const name = target.room.name;
+    const run = async (calls: { domain: string; service: string; data: Record<string, unknown> }[]) => {
+      await Promise.all(calls.map((c) => hass.callService(c.domain, c.service, c.data)));
+    };
+    if (intent.action === "clean") {
+      const call = cleaningCall(hass, target.room);
+      if (!call) return translate(hass, "voice_clean_none", { room: name });
+      await run([call]);
+      return translate(hass, "voice_clean_started", { room: name });
+    }
+    const calls = everythingOff(hass, target.floor, target.room);
+    if (!calls.length) return translate(hass, "voice_off_nothing", { room: name });
+    await run(calls);
+    return translate(hass, "voice_off_done", { room: name, n: callCount(calls) });
+  }
+
   /** One spoken sentence: a place to show ("Zeig das Wohnzimmer") is shown, anything else goes to Assist. */
   private async onMic(): Promise<void> {
     const hass = this.hass;
@@ -4521,7 +4791,16 @@ export class Fp3dView3d extends LitElement {
       }
       if ((await this.handleSentence(hass, b, v, text, true)) !== null) return;
       say("wait", `“${text}” …`);
-      const answer = await v.converse(hass, text, this.voiceArea ?? voiceArea());
+      // "there" is the room open in the view ("Mach da das Licht aus" after tapping into the living room); "here" and
+      // a sentence without a room are the tablet's
+      let area = this.voiceArea ?? voiceArea();
+      let said = text;
+      const open = this.openRoom(b);
+      if (open?.room.area_id && v.saysThere(text, hass.language)) {
+        area = open.room.area_id;
+        said = v.withoutThere(text, hass.language);
+      }
+      const answer = await v.converse(hass, said, area);
       say("done", answer ? `“${text}” – ${answer}` : `“${text}”`);
     } catch (err) {
       const e = err as { name?: string; message?: string };
@@ -4544,7 +4823,21 @@ export class Fp3dView3d extends LitElement {
    */
   private async handleSentence(hass: HomeAssistant, b: Building, v: Awaited<ReturnType<typeof loadVoice>>, text: string, speak: boolean): Promise<string | null> {
     const say = (phase: "wait" | "listen" | "done" | "error", t: string) => this.sayVoice(phase, t);
+    const styled = this.replay ? null : this.styleSentence(text);
+    if (styled) {
+      say("done", `“${text}” – ${styled}`);
+      if (speak) void v.speak(hass, styled, voicePipeline());
+      return styled;
+    }
     const { devices, items } = this.spokenDevices(hass, b, v.SYNONYMS);
+    // "Saug die Küche", "Saug hier", "Mach da alles aus": the robot vacuum or everything off for a room
+    const intent = this.replay ? null : v.roomIntent(text, b, hass.language, (r) => (r.area_id ? hass.areas?.[r.area_id]?.name : null));
+    if (intent) {
+      const answer = await this.roomAction(hass, b, intent);
+      say("done", `“${text}” – ${answer}`);
+      if (speak) void v.speak(hass, answer, voicePipeline());
+      return answer;
+    }
     {
       const place = v.showTarget(text, b, devices, (r) => (r.area_id ? hass.areas?.[r.area_id]?.name : null));
       if (place) {
@@ -4850,6 +5143,7 @@ export class Fp3dView3d extends LitElement {
     const spoken = () => (spokenList ??= this.spokenDevices(hass, b, synonyms).spoken);
     const host: ModuleHost = {
       api: 1,
+      stage: 2,
       hass: () => this.hass,
       building: () => this.building,
       language: () => hass.language || "en",
@@ -4859,14 +5153,14 @@ export class Fp3dView3d extends LitElement {
         return hit?.kind === "device" && hit.id ? (spoken().find((d) => d.id === hit.id) ?? null) : null;
       },
       dimmed: () => this.dimmed,
-      canEdit: () => !!this.hass?.user?.is_admin && !this.ro,
+      canEdit: () => !!this.hass?.user?.is_admin && !this.ro && !this.noSave,
       updateBuilding: (mutate) => {
         const cur = this.building;
-        if (!cur || !this.hass || this.ro || !this.hass.user?.is_admin) return;
+        if (!cur || !this.hass || this.ro || this.noSave || !this.hass.user?.is_admin) return;
         const next = structuredClone(cur);
         mutate(next);
         this.building = next;
-        saveBuilding(this.hass, next).catch((err) => this.serviceFailed("neonplan3d/building/save", err));
+        saveBuilding(this.hass, next, this.planId ?? undefined).catch((err) => this.serviceFailed("neonplan3d/building/save", err));
       },
       callService: (domain, service, data) => (this.hass ? this.hass.callService(domain, service, data) : Promise.resolve()),
       newId: (prefix) => uid(prefix),
@@ -4880,6 +5174,16 @@ export class Fp3dView3d extends LitElement {
         const floor = this.building?.floors.find((f) => f.id === floorId);
         return floor ? outdoorGround(floor, x, z) : 0;
       },
+      openPopup: (id, autoCloseMs) => this.openModulePopup(id, autoCloseMs),
+      closePopup: () => this.closeModulePopup(),
+      imageUrl: (id) => this.pictureUrl(id),
+      people: () =>
+        this.lastPersons.flatMap((p) => {
+          const room = this.building?.floors.find((fl) => fl.id === p.floorId)?.rooms.find((r) => r.id === p.roomId);
+          return room ? [{ id: p.id, floorId: p.floorId, roomId: p.roomId, roomName: room.name }] : [];
+        }),
+      look: () => (this.effectiveTheme() === "day" ? "light" : "dark"),
+      lowPower: () => this._low,
       refresh: () => {
         this.requestUpdate();
         // the stage and the cards come from the module: ask it again (once, however often it asks)
@@ -4910,6 +5214,11 @@ export class Fp3dView3d extends LitElement {
         }
       },
       notify: (text) => this.showNote(text),
+      tour: (stops, speak) => {
+        const items = this.spokenDevices(hass, b, synonyms).items;
+        const talk = speak ? (t: string) => loadVoice().then((v) => v.speak(hass, t, voicePipeline())) : null;
+        void this.runTour(stops, b, items, talk);
+      },
       occupied: () => this.occupiedRooms(hass, b),
       speakers: () => this.planSpeakers(hass, b),
     };
@@ -4973,6 +5282,46 @@ export class Fp3dView3d extends LitElement {
   }
 
   /** Opens a module's sheet for a room (from its panel). */
+  private plainOf: { from: Building; to: Building } | null = null;
+  /** The plan as last drawn, without its card templates (see planKey). */
+  private drawnPlan = "";
+  private condOf: { from: Building; sig: string; to: Building } | null = null;
+  /** Which pieces with a condition ("only show while …") the 3D view shows now. */
+  private shownSig = "";
+
+  /**
+   * The building the 3D view draws: as it is, or in the plain view without furniture – stairs, stairwells and
+   * pack stairs stay (they cut the floors); lamps go with the rest, the device pins stay.
+   */
+  /**
+   * The building without the pieces whose condition is false now ("only show while …", decoration for a season): they
+   * leave the 3D view with their light and their pin. The editor always shows them.
+   */
+  private conditioned(): Building | null {
+    const b = this.building;
+    const sig = showIfSignature(this.hass, b);
+    this.shownSig = sig;
+    // a card for some rooms: only they are drawn (the building itself stays whole – settings saved from here keep it)
+    const rooms = shownRoomIds(b, this.rooms);
+    const key = `${sig}|${rooms.join(",")}`;
+    if (!b || (!sig && !rooms.length)) return b;
+    if (this.condOf?.from === b && this.condOf.sig === key) return this.condOf.to;
+    let to: Building = sig ? { ...b, floors: b.floors.map((f) => ({ ...f, furniture: f.furniture.filter((x) => furnitureShown(this.hass, x)) })) } : b;
+    if (rooms.length) to = roomsOnly(to, rooms);
+    this.condOf = { from: b, sig: key, to };
+    return to;
+  }
+
+  private shownBuilding(): Building | null {
+    const b = this.conditioned();
+    if (!b || !this.plain) return b;
+    if (this.plainOf?.from === b) return this.plainOf.to;
+    const keep = (f: Furniture) => STAIR_TYPES.has(f.type) || f.type === "stairwell" || !!packItem(f.type)?.hole;
+    const to = { ...b, floors: b.floors.map((f) => ({ ...f, furniture: f.furniture.filter(keep) })) };
+    this.plainOf = { from: b, to };
+    return to;
+  }
+
   openRoomSheet(roomId: string, id: string): void {
     const floor = this.building?.floors.find((f) => f.rooms.some((r) => r.id === roomId));
     this._sheet = { id, floorId: floor?.id ?? null, roomId };
@@ -4985,6 +5334,133 @@ export class Fp3dView3d extends LitElement {
     const host = this.sceneHost(hass, b);
     const list = sh.roomId && sh.floorId ? moduleRoomSheets(host, { floorId: sh.floorId, roomId: sh.roomId }) : moduleMenuSheets(host);
     return list.find((x) => x.id === sh.id) ?? null;
+  }
+
+  // ------------------------------------------------------------------ a module's pop-up
+
+  /** Opens a module's pop-up (a tap on a screen piece, or the module itself); it closes by itself after a while. */
+  private openModulePopup(id: string, autoClose = 60_000): void {
+    clearTimeout(this.popupTimer);
+    this._popup = { id };
+    this.popupValues = {};
+    this.popupTimer = setTimeout(() => (this._popup = null), autoClose);
+  }
+
+  private closeModulePopup(): void {
+    clearTimeout(this.popupTimer);
+    this._popup = null;
+    this.popupValues = {};
+  }
+
+  /** The pop-up a module opened, drawn from its sections in the view's own look. */
+  private renderModulePopup() {
+    const hass = this.hass;
+    const b = this.building;
+    const pop = this._popup;
+    if (!hass || !b || !pop) return nothing;
+    const spec = modulePopups(this.sceneHost(hass, b)).find((p) => p.id === pop.id);
+    if (!spec) return nothing;
+    const close = () => this.closeModulePopup();
+    const t = (k: I18nKey) => translate(hass, k);
+    const section = (s: PopupSection) => {
+      switch (s.kind) {
+        case "image": {
+          const stream = s.live && hasFeature("camera_cockpit") && b.settings.director?.live ? this.liveFor(s.live) : null;
+          return stream ? html`<div class="fp3d-pop-big fp3d-pop-live">${stream}</div>` : html`<img class="fp3d-pop-big" src=${s.src} alt="" />`;
+        }
+        case "text":
+          return html`<p class=${s.muted ? "fp3d-sub" : "fp3d-pop-text"}>${s.text}</p>`;
+        case "heading":
+          return html`<h4 class="fp3d-pop-h">${s.text}</h4>`;
+        case "line":
+          return html`<div class="fp3d-pop-line"><span>${s.text}</span>${s.sub ? html`<span>${s.sub}</span>` : nothing}${s.note ? html`<em>${s.note}</em>` : nothing}</div>`;
+        case "groups":
+          return s.groups.length
+            ? html`<div class="fp3d-pop-groups">
+                ${s.groups.map(
+                  (g) => html`<section class=${g.strong ? "fp3d-pop-strong" : ""}>
+                    <h4 role=${g.onToggle ? "button" : nothing} tabindex=${g.onToggle ? 0 : nothing} @click=${() => g.onToggle?.()}>${g.title} ${g.onToggle ? html`<small>${g.open ? "▾" : "▸"}</small>` : nothing}</h4>
+                    ${g.rows.map(
+                      (r) => html`<div class="fp3d-pop-row ${r.leadStrong ? "fp3d-pop-rowlive" : ""}" style=${r.color ? `--cal:${r.color}` : ""}>
+                        <span class="fp3d-pop-lead">${r.lead}</span>
+                        <span class="fp3d-pop-sum">${r.text}${r.sub ? html`<small> · ${r.sub}</small>` : nothing}${g.open && r.detail ? html`<em>${r.detail}</em>` : nothing}</span>
+                      </div>`,
+                    )}
+                  </section>`,
+                )}
+              </div>`
+            : html`<p class="fp3d-sub">${s.empty ?? ""}</p>`;
+        case "checklist":
+          return html`<div class="fp3d-pop-todo">
+            ${s.items.length
+              ? s.items.map(
+                  (it) => html`<label class="fp3d-pop-todoitem ${it.done ? "fp3d-pop-done" : ""}">
+                    <input type="checkbox" .checked=${it.done} ?disabled=${this.ro} @change=${() => void it.onToggle()} />
+                    <span>${it.text}</span>
+                  </label>`,
+                )
+              : html`<p class="fp3d-sub">${s.empty ?? ""}</p>`}
+          </div>`;
+        case "people":
+          return html`<div class="fp3d-pop-people">
+            ${s.items.map(
+              (p) => html`<div class="fp3d-pop-personrow ${p.bright ? "fp3d-pop-bright" : ""}">
+                ${p.picture ? html`<img src=${p.picture} alt="" />` : html`<span class="fp3d-pop-initial">${p.name.slice(0, 1)}</span>`}
+                <div><b>${p.name}</b><span>${p.sub}</span></div>
+              </div>`,
+            )}
+          </div>`;
+        case "tiles":
+          return html`<div class="fp3d-pop-tiles">${s.items.map((d) => html`<div><small>${d.label}</small><span>${d.symbol}</span><b>${d.main}</b>${d.sub ? html`<small>${d.sub}</small>` : nothing}</div>`)}</div>`;
+        case "media":
+          return html`<div class="fp3d-pop-media">
+            ${s.picture ? html`<img class="fp3d-pop-cover" src=${s.picture} alt="" />` : nothing}
+            <div class="fp3d-pop-mediatext">
+              <b>${s.title}</b>
+              ${s.sub ? html`<span>${s.sub}</span>` : nothing}
+              ${s.buttons?.length ? html`<div class="fp3d-pop-ctl">${s.buttons.map((bt) => html`<button class="fp3d-chip" @click=${() => void bt.onTap()}>${bt.label}</button>`)}</div>` : nothing}
+            </div>
+          </div>`;
+        case "form": {
+          if (this.ro) return nothing;
+          if (!s.open) return html`<button class="fp3d-btn fp3d-pop-addbtn" @click=${() => s.onOpen()}>${s.button}</button>`;
+          const value = (f: { id: string; value: string }) => this.popupValues[`${s.id}:${f.id}`] ?? f.value;
+          const setValue = (f: { id: string }, v: string) => (this.popupValues = { ...this.popupValues, [`${s.id}:${f.id}`]: v });
+          return html`<form class="fp3d-pop-form" @submit=${(e: Event) => {
+            e.preventDefault();
+            void s.onSubmit(Object.fromEntries(s.fields.map((f) => [f.id, value(f)])));
+          }}>
+            ${s.fields.map((f) =>
+              f.kind === "select"
+                ? html`<select class="fp3d-pop-in" @change=${(e: Event) => setValue(f, (e.target as HTMLSelectElement).value)}>
+                    ${(f.options ?? []).map((o) => html`<option value=${o.id} ?selected=${o.id === value(f)}>${o.label}</option>`)}
+                  </select>`
+                : html`<input class="fp3d-pop-in" type=${f.kind} placeholder=${f.placeholder ?? ""} .value=${value(f)} @input=${(e: Event) => setValue(f, (e.target as HTMLInputElement).value)} />`,
+            )}
+            <div class="fp3d-pop-ctl"><button class="fp3d-btn fp3d-primary" type="submit">${s.submit}</button><button class="fp3d-btn" type="button" @click=${() => s.onCancel()}>${t("cancel")}</button></div>
+          </form>`;
+        }
+        case "input":
+          return this.ro
+            ? nothing
+            : html`<form class="fp3d-pop-form" @submit=${(e: Event) => {
+                e.preventDefault();
+                const input = (e.target as HTMLFormElement).querySelector("input")!;
+                void s.onSubmit(input.value);
+                input.value = "";
+              }}>
+                <input class="fp3d-pop-in" placeholder=${s.placeholder} />
+                <button class="fp3d-btn fp3d-primary" type="submit">${s.button}</button>
+              </form>`;
+        default:
+          return nothing;
+      }
+    };
+    return html`<div class="fp3d-sheet-backdrop" @click=${close}></div>
+      <div class="fp3d-sheet fp3d-pop ${spec.wide ? "fp3d-pop-wide" : ""}" role="dialog" aria-label=${spec.title}>
+        <header><span>${spec.icon ? `${spec.icon} ` : ""}${spec.title}</span><button class="fp3d-sheet-x" aria-label=${t("close")} @click=${close}>✕</button></header>
+        ${spec.sections.map(section)}
+      </div>`;
   }
 
   private renderSheet() {
@@ -5065,11 +5541,11 @@ export class Fp3dView3d extends LitElement {
   /** Changes the plan's settings from the ⚙ menu and saves them (administrators only). */
   private setPlanSettings(patch: Partial<Building["settings"]>): void {
     const cur = this.building;
-    if (!cur || !this.hass?.user?.is_admin || this.ro) return;
+    if (!cur || !this.hass?.user?.is_admin || this.ro || this.noSave) return;
     const next = structuredClone(cur);
     Object.assign(next.settings, patch);
     this.building = next;
-    saveBuilding(this.hass, next).catch((err) => this.serviceFailed("neonplan3d/building/save", err));
+    saveBuilding(this.hass, next, this.planId ?? undefined).catch((err) => this.serviceFailed("neonplan3d/building/save", err));
   }
 
   /**
@@ -5082,7 +5558,7 @@ export class Fp3dView3d extends LitElement {
     const b = this.building;
     if (!hass || !b || !this._settingsOpen) return nothing;
     const t = (k: I18nKey) => translate(hass, k);
-    const admin = !!hass.user?.is_admin && !this.ro;
+    const admin = !!hass.user?.is_admin && !this.ro && !this.noSave;
     const st = b.settings;
     const check = (key: I18nKey, on: boolean, patch: (v: boolean) => Partial<Building["settings"]>, hint?: I18nKey) =>
       html`<label class="fp3d-set-check" title=${hint ? t(hint) : ""}
@@ -5109,12 +5585,22 @@ export class Fp3dView3d extends LitElement {
         ${admin ? nothing : html`<p class="fp3d-set-note">${t("view_settings_admin")}</p>`}
         <h4>${t("view_settings_look")}</h4>
         ${check("sun_shadow", st.sun_shadow !== false, (v) => ({ sun_shadow: v }), "sun_shadow_hint")}
+        ${st.sun_shadow !== false
+          ? html`<label class="fp3d-set-field" title=${t("sun_arc_hint")}
+              >${t("sun_arc")}
+              <select ?disabled=${!admin} @change=${(e: Event) => this.setPlanSettings({ sun_arc: (e.target as HTMLSelectElement).value === "plot" ? "plot" : null })}>
+                <option value="house" ?selected=${st.sun_arc !== "plot"}>${t("sun_arc_house")}</option>
+                <option value="plot" ?selected=${st.sun_arc === "plot"}>${t("sun_arc_plot")}</option>
+              </select></label
+            >`
+          : nothing}
         ${check("window_glow", st.window_glow !== false, (v) => ({ window_glow: v }), "window_glow_hint")}
         ${gpuSafeMode(GUARD_VERSION) ? html`<p class="fp3d-set-note">${t("gpu_safe_note")}</p>` : nothing}
         ${check("sun_patches", st.sun_patches !== false, (v) => ({ sun_patches: v }))}
         ${this.renderGlassSize(t, admin, st)}
         <h4>${t("view_settings_control")}</h4>
         ${check("tap_in_room", !!st.tap_in_room, (v) => ({ tap_in_room: v }), "tap_in_room_hint")}
+        ${check("right_click_back", !!st.right_click_back, (v) => ({ right_click_back: v }), "right_click_back_hint")}
         <h4>${t("view_settings_alerts")}</h4>
         ${check("rain_warning", st.rain_warning !== false, (v) => ({ rain_warning: v }))}
         ${check("alert_unavailable", !!st.alert_unavailable, (v) => ({ alert_unavailable: v }))}
@@ -5228,8 +5714,8 @@ export class Fp3dView3d extends LitElement {
     const floorId = b.floors.find((f) => f.placements.some((p) => p.entity_id === entityId))?.id;
     if (!floorId) return;
     this._menu = null;
-    if (!this._through) this._through = { entity: entityId, back: v.getView() };
-    else this._through = { ...this._through, entity: entityId };
+    if (!this._through) this._through = { entity: entityId, back: v.getView(), ready: false };
+    else this._through = { ...this._through, entity: entityId, ready: false };
     this.watchCameras(true);
     // another floor first opens (its own flight must not win over ours)
     const wait = this.floorId === floorId ? 0 : 300;
@@ -5240,6 +5726,10 @@ export class Fp3dView3d extends LitElement {
     setTimeout(() => {
       if (this._through?.entity === entityId && !this.viewer?.lookThrough(entityId)) this._through = null;
     }, wait);
+    // the picture comes when the flight has arrived, also when it was loaded before (#1060)
+    setTimeout(() => {
+      if (this._through?.entity === entityId) this._through = { ...this._through, ready: true };
+    }, wait + 950);
   }
 
   private endThrough(): void {
@@ -5248,6 +5738,7 @@ export class Fp3dView3d extends LitElement {
     this._through = null;
     // the stream player goes with the look (the camera wall makes its own when it opens)
     if (this.live?.id === t.entity) this.live = null;
+    this.viewer?.endLook();
     this.viewer?.flyTo(t.back);
     if (this.throughWall) {
       this.throughWall = false;
@@ -5375,6 +5866,41 @@ export class Fp3dView3d extends LitElement {
     return this.live.el;
   }
 
+  /** A detection of the camera that just went on opens its picture as a pop-up for 20 s (#442), once per detection. */
+  private popOnDetection(hass: HomeAssistant, camera: string): void {
+    const now = this.now();
+    for (const id of cameraMotionSensors(hass, camera)) {
+      const st = hass.states[id];
+      if (st?.state !== "on" || !st.last_changed) continue;
+      const at = Date.parse(st.last_changed);
+      const key = `${id}@${st.last_changed}`;
+      // only what is new: an old detection seen when the page opens does not pop up
+      if (this.popSeen.has(key) || now - at > 30_000) continue;
+      this.popSeen.add(key);
+      if (this.popSeen.size > 200) this.popSeen = new Set([...this.popSeen].slice(-50));
+      const cam = hass.states[camera];
+      const picture = cam?.attributes.entity_picture as string | undefined;
+      const src = picture && !isUnavailable(cam) ? (picture.startsWith("data:") ? picture : `${picture}${picture.includes("?") ? "&" : "?"}fp3d=${Date.now()}`) : null;
+      this._camPop = { entity: camera, text: `${translate(hass, `detect_${detectionKind(hass, id)}` as I18nKey)} · ${entityName(hass, camera)}`, until: now + 20_000, src };
+      clearTimeout(this.camPopTimer);
+      this.camPopTimer = setTimeout(() => (this._camPop = null), 20_000);
+      return;
+    }
+  }
+
+  private camPopTimer: ReturnType<typeof setTimeout> | undefined;
+
+  private renderCamPop() {
+    const p = this._camPop;
+    if (!p || !this.hass || this._through) return nothing;
+    return html`<div class="fp3d-campop" role="status">
+      <button class="fp3d-campop-img" title=${translate(this.hass, "camera_popup_open")} @click=${() => ((this._camPop = null), this.lookThrough(p.entity))}>
+        ${p.src ? html`<img src=${p.src} alt="" />` : nothing}
+      </button>
+      <div class="fp3d-campop-bar"><span>${p.text}</span><button class="fp3d-chip" aria-label=${translate(this.hass, "close")} @click=${() => (this._camPop = null)}>✕</button></div>
+    </div>`;
+  }
+
   private renderThrough() {
     const t = this._through;
     if (!t || !this.hass) return nothing;
@@ -5384,7 +5910,7 @@ export class Fp3dView3d extends LitElement {
     // the live stream when it is switched on (D589), the still until the player is there or when it fails
     const stream = this.building?.settings.director?.live ? this.liveFor(t.entity) : null;
     return html`<div class="fp3d-through" style="--fp3d-blend:${this._blend}">
-      ${stream ? html`<div class="fp3d-through-img fp3d-through-live">${stream}</div>` : src ? html`<img class="fp3d-through-img" src=${src} alt="" />` : nothing}
+      ${!t.ready ? nothing : stream ? html`<div class="fp3d-through-img fp3d-through-live">${stream}</div>` : src ? html`<img class="fp3d-through-img" src=${src} alt="" />` : nothing}
       <div class="fp3d-through-bar">
         <span class="fp3d-through-name">${entityName(this.hass, t.entity)}</span>
         <span class="fp3d-still">${stream ? "● Live" : translate(this.hass, "camera_still", { s: this._low ? 10 : 5 })}</span>
@@ -5428,6 +5954,7 @@ export class Fp3dView3d extends LitElement {
         .entity=${m.entity}
         .car=${m.car ?? null}
         ?doorLock=${!!m.doorLock}
+        ?slatInvert=${slatsInverted(this.building, m.entity)}
         .presets=${hasFeature("sound") ? (this.building?.settings.media_presets ?? []) : []}
         ?confirmSwitch=${this.confirmSet.has(m.entity)}
         ?pro=${hasFeature("camera_cockpit")}
@@ -5499,6 +6026,7 @@ export class Fp3dView3d extends LitElement {
     // trail pins and lamps without a light are drawn, but nothing of Home Assistant stands behind them
     if (entityId.startsWith("trail:") || entityId.startsWith("lamp:")) return;
     if (entityId.startsWith("module:")) return this.openModuleCard(entityId.slice(7));
+    if (entityId.startsWith("popup:")) return this.openModulePopup(entityId.slice(6));
     if (entityId.startsWith("opening:")) return this.onOpeningTap(entityId.slice(8), x, y, false);
     // a wall switch or socket: one entity is switched right away, several open the frame's menu
     if (entityId.startsWith("gangs:")) {
@@ -5596,10 +6124,78 @@ export class Fp3dView3d extends LitElement {
     void this.hass.callService(domain, domain === "switch" ? "turn_on" : "press", { entity_id: drive });
   }
 
-  /** The look shown: the chosen one, or by the sun for "auto" – Day above the horizon, Neon below. */
+  /** The classic look under the style shown: pins, menus and the stage follow it. */
   private effectiveTheme(): Theme {
-    if (this.theme !== "auto") return this.theme;
-    return this.hass?.states["sun.sun"]?.state === "above_horizon" ? "day" : "neon";
+    return this.effectiveStyle().base;
+  }
+
+  /** The style shown now: a set override, the helper entity, the screen's choice, the time of day. */
+  private effectiveStyle(): StyleDef {
+    const hass = this.hass;
+    const settings = this.building?.settings;
+    const over = this._styleOverride;
+    const live = over && (over.until === null || over.until > Date.now()) ? over.style : null;
+    const entity = this.styleEntity || settings?.style_entity || null;
+    setCustomStyles(settings?.styles_custom);
+    const names: Record<string, string[]> = {};
+    for (const s of allStyles()) names[s.id] = [s.name ?? translate(hass, `style_${s.id}` as I18nKey)];
+    const sun = hass?.states["sun.sun"]?.state;
+    const id = resolveStyle({
+      choice: this.theme,
+      evening: this.themeEvening,
+      night: this.themeNight,
+      plan: settings,
+      entityState: entity ? (hass?.states[entity]?.state ?? null) : null,
+      override: live,
+      now: new Date(),
+      sunUp: sun === "above_horizon" ? true : sun === "below_horizon" ? false : null,
+      names,
+    });
+    return styleById(id) ?? styleById("neon")!;
+  }
+
+  /** Remembers a style set from outside for this device ("" or "reset": back to the setting). */
+  private setStyleOverride(style: string, minutes: number | null): string | null {
+    const id = style === "" || style === "reset" || style === "auto_reset" ? null : (styleById(style) ? style : styleFromText(style));
+    this._styleOverride = id ? { style: id, until: minutes ? Date.now() + minutes * 60000 : null } : null;
+    try {
+      if (this._styleOverride) localStorage.setItem(STYLE_OVERRIDE_KEY, JSON.stringify(this._styleOverride));
+      else localStorage.removeItem(STYLE_OVERRIDE_KEY);
+    } catch {
+      // private mode: for this page only
+    }
+    this.viewer?.setStyle(this.effectiveStyle());
+    return id;
+  }
+
+  /** The action `neonplan3d.set_style` for the open screens: this view when it is named, or when none is. */
+  private onStyle(st: ScreenStyle): void {
+    const mine = (this.screen ?? "").trim().toLowerCase();
+    if (st.screens.length && !st.screens.some((x) => x.trim().toLowerCase() === mine)) return;
+    this.setStyleOverride(st.style, st.minutes ?? null);
+  }
+
+  /** "Stil Wohnlich", "NeonPlan auf Pastell", "style homely": switches this view's style (null: no style sentence). */
+  private styleSentence(text: string): string | null {
+    const hass = this.hass;
+    const words = text.toLowerCase().trim();
+    const keyword = /\b(stil|style|look|design|farbstil|ansicht|optik)\b/.test(words);
+    const rest = words
+      .replace(/\b(neon ?plan|haus|house|bitte|please|stelle?|schalte?|mach|setze?|set|switch|change|to|auf|zu|um|in|den|die|das|the|an|on|ein|als|modus|mode|stil|style|look|design|farbstil|ansicht|optik)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (keyword && /^(zurück|zurueck|normal|reset|back|standard|automatisch|auto)$/.test(rest)) {
+      this.setStyleOverride("reset", null);
+      return translate(hass, "style_reset");
+    }
+    setCustomStyles(this.building?.settings.styles_custom);
+    const names: Record<string, string[]> = {};
+    for (const st of allStyles()) names[st.id] = [st.name ?? translate(hass, `style_${st.id}` as I18nKey)];
+    // the words left must name a style as a whole ("Wohnlich Abend", "auf Synthwave"), so "Licht an" stays a light
+    const id = styleFromText(rest, names);
+    if (!id) return null;
+    this.setStyleOverride(id, null);
+    return translate(hass, "style_set", { name: styleById(id)?.name ?? translate(hass, `style_${id}` as I18nKey) });
   }
 
   /** The start view: the card's own, else the one remembered in the editor. */
@@ -5738,7 +6334,8 @@ export class Fp3dView3d extends LitElement {
     const mix = (a: number[], b: number[]) => `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * sky)).join(",")})`;
     const stage = STAGE[this.effectiveTheme()] ?? STAGE.neon;
     // an own background (colour, gradient, picture) replaces the look's sky
-    const own = backdropCss(this.building?.settings.backdrop);
+    const styleBg = this.effectiveStyle().bg;
+    const own = backdropCss(this.building?.settings.backdrop) ?? (styleBg ? `linear-gradient(180deg, ${styleBg[0]}, ${styleBg[1]})` : null);
     const pinK = this.pinSize === "small" ? 0.8 : this.pinSize === "large" ? 1.25 : 1;
     const style = `--fp3d-pin-k:${pinK};--fp3d-sky:${mix(stage.night[0], stage.day[0])};--fp3d-ground:${mix(stage.night[1], stage.day[1])}${own ? `;background:${own}` : ""}`;
     return html`<div
@@ -5749,7 +6346,7 @@ export class Fp3dView3d extends LitElement {
       style=${style}
     >
       ${this._error ? html`<p class="fp3d-error">${this._error}</p>` : nothing} ${this.clean ? nothing : this.renderEnergy()} ${this.renderHologram()} ${this.clean ? nothing : this.renderLegend()}
-      ${this.renderClock()} ${this.renderAlerts()} ${this.clean || this._walk ? nothing : html`${this.renderHousehold()} ${this.renderThumbs()} ${this.renderScenes()} ${this.renderFind()} ${this.renderCentral()}`} ${this.clean ? nothing : this.renderWalk()} ${this.renderSwipe()} ${this.renderInfo()} ${this.renderBinInfo()} ${this.renderGangMenu()} ${this.renderThrough()} ${this.renderCameraWall()} ${this.renderSheet()} ${this.renderSettings()} ${this.renderNote()}
+      ${this.renderClock()} ${this.renderAlerts()} ${this.clean || this._walk ? nothing : html`${this.renderHousehold()} ${this.renderThumbs()} ${this.renderScenes()} ${this.renderFind()} ${this.renderCentral()}`} ${this.clean ? nothing : this.renderWalk()} ${this.renderSwipe()} ${this.renderInfo()} ${this.renderBinInfo()} ${this.renderGangMenu()} ${this.renderThrough()} ${this.renderCamPop()} ${this.renderCameraWall()} ${this.renderSheet()} ${this.renderModulePopup()} ${this.renderSettings()} ${this.renderNote()}
       ${this.clean ? nothing : this.renderProHint()} ${this.renderMenu()} ${this.renderEye()}
       ${this.renderMic()}
       ${this._announce ? html`<div class="fp3d-announce" role="status" @click=${() => (this._announce = null)}>📢 ${this._announce}</div>` : nothing}
@@ -6294,7 +6891,9 @@ export class Fp3dView3d extends LitElement {
       .fp3d-person[hidden] {
         display: none;
       }
-      .fp3d-no-room-names .fp3d-pin {
+      /* room names off: the pins go, but the "values" stay (without the name) */
+      .fp3d-no-room-names .fp3d-pin:not(.fp3d-pin-info),
+      .fp3d-no-room-names .fp3d-pin-info .fp3d-pin-name {
         display: none !important;
       }
       /* tablet level: blur over the canvas and glowing shadows are expensive on weak GPUs */
@@ -6923,6 +7522,239 @@ export class Fp3dView3d extends LitElement {
         z-index: 7;
         background: rgba(4, 8, 16, 0.35);
       }
+      .fp3d-pop {
+        width: min(560px, calc(100% - 24px));
+      }
+      .fp3d-pop.fp3d-pop-wide {
+        width: min(960px, calc(100% - 24px));
+      }
+      .fp3d-pop-big {
+        display: block;
+        width: 100%;
+        max-height: calc(100vh - 160px);
+        object-fit: contain;
+        border-radius: 12px;
+        background: #000;
+      }
+      .fp3d-pop-groups {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .fp3d-pop-groups h4 {
+        margin: 0 0 6px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--fp3d-muted, #8fa0c0);
+      }
+      .fp3d-pop-strong h4 {
+        color: var(--fp3d-accent, #37e0ff);
+      }
+      .fp3d-pop-row {
+        display: grid;
+        grid-template-columns: 96px 1fr;
+        gap: 10px;
+        align-items: baseline;
+        padding: 6px 0 6px 12px;
+        border-left: 3px solid var(--cal, #37e0ff);
+        margin-bottom: 4px;
+      }
+      .fp3d-pop-lead {
+        font-variant-numeric: tabular-nums;
+        color: var(--fp3d-muted, #8fa0c0);
+        font-size: 13px;
+      }
+      .fp3d-pop-sum {
+        font-size: 15px;
+      }
+      .fp3d-pop-sum small {
+        color: var(--fp3d-muted, #8fa0c0);
+      }
+      .fp3d-pop-media,
+      .fp3d-pop-person {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+      }
+      .fp3d-pop-cover {
+        width: 160px;
+        height: 160px;
+        object-fit: cover;
+        border-radius: 12px;
+        background: #000;
+        flex: none;
+      }
+      .fp3d-pop-sym {
+        font-size: 72px;
+        line-height: 1;
+        flex: none;
+      }
+      .fp3d-pop-mediatext {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+      .fp3d-pop-mediatext b {
+        font-size: 18px;
+      }
+      .fp3d-pop-mediatext span {
+        color: var(--fp3d-muted, #8fa0c0);
+      }
+      .fp3d-pop-ctl {
+        display: flex;
+        gap: 8px;
+        margin-top: 6px;
+      }
+      .fp3d-pop-rowlive .fp3d-pop-lead {
+        color: var(--fp3d-accent, #37e0ff);
+        font-weight: 700;
+      }
+      .fp3d-pop-groups h4 {
+        cursor: pointer;
+      }
+      .fp3d-pop-sum em {
+        display: block;
+        font-style: normal;
+        font-size: 13px;
+        color: var(--fp3d-muted, #8fa0c0);
+        margin-top: 2px;
+      }
+      .fp3d-pop-form {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-top: 6px;
+      }
+      .fp3d-pop-in {
+        flex: 1 1 140px;
+        min-width: 0;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--fp3d-line);
+        background: rgba(255, 255, 255, 0.06);
+        color: inherit;
+        font: inherit;
+      }
+      .fp3d-pop-addbtn {
+        align-self: flex-start;
+        margin-top: 4px;
+      }
+      .fp3d-pop-todo {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .fp3d-pop-todoitem {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 8px 6px;
+        border-radius: 10px;
+        font-size: 16px;
+        cursor: pointer;
+      }
+      .fp3d-pop-todoitem:hover {
+        background: rgba(255, 255, 255, 0.05);
+      }
+      .fp3d-pop-todoitem input {
+        width: 22px;
+        height: 22px;
+        accent-color: var(--fp3d-accent, #37e0ff);
+      }
+      .fp3d-pop-done span {
+        text-decoration: line-through;
+        color: var(--fp3d-muted, #8fa0c0);
+      }
+      .fp3d-pop-people {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .fp3d-pop-personrow {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        opacity: 0.6;
+      }
+      .fp3d-pop-personrow.fp3d-pop-bright {
+        opacity: 1;
+      }
+      .fp3d-pop-personrow img,
+      .fp3d-pop-initial {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        object-fit: cover;
+        background: rgba(255, 255, 255, 0.1);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        flex: none;
+      }
+      .fp3d-pop-personrow div {
+        display: flex;
+        flex-direction: column;
+      }
+      .fp3d-pop-personrow span {
+        color: var(--fp3d-muted, #8fa0c0);
+        font-size: 13px;
+      }
+      .fp3d-pop-h {
+        margin: 10px 0 4px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--fp3d-muted, #8fa0c0);
+      }
+      .fp3d-pop-line {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 12px;
+        align-items: baseline;
+        font-size: 18px;
+      }
+      .fp3d-pop-line span + span {
+        color: var(--fp3d-muted, #8fa0c0);
+        font-size: 14px;
+      }
+      .fp3d-pop-line em,
+      .fp3d-pop-mediatext em {
+        font-style: normal;
+        color: var(--fp3d-accent, #37e0ff);
+        font-size: 14px;
+      }
+      .fp3d-pop-waste {
+        margin: 0;
+      }
+      .fp3d-pop-tiles {
+        display: flex;
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .fp3d-pop-tiles div {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        padding: 8px 4px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.05);
+      }
+      .fp3d-pop-tiles span {
+        font-size: 26px;
+      }
+      .fp3d-pop-tiles small {
+        color: var(--fp3d-muted, #8fa0c0);
+      }
+      .fp3d-pop-live {
+        aspect-ratio: 16 / 9;
+        overflow: hidden;
+      }
       .fp3d-sheet {
         position: absolute;
         left: 50%;
@@ -7065,6 +7897,43 @@ export class Fp3dView3d extends LitElement {
         box-shadow: var(--fp3d-shadow);
         z-index: 9;
         pointer-events: none;
+      }
+      /* a camera's new detection as a small picture (#442) */
+      .fp3d-campop {
+        position: absolute;
+        right: 12px;
+        bottom: calc(var(--fp3d-bottom-inset, 0px) + 64px);
+        z-index: 5;
+        width: min(360px, 70vw);
+        border-radius: 14px;
+        overflow: hidden;
+        background: rgba(8, 16, 34, 0.9);
+        border: 1px solid rgba(255, 120, 120, 0.6);
+        box-shadow: 0 0 26px rgba(255, 80, 80, 0.35);
+      }
+      .fp3d-campop-img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        padding: 0;
+        border: 0;
+        background: #000;
+        cursor: pointer;
+      }
+      .fp3d-campop-img img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .fp3d-campop-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 6px 10px;
+        font-size: 13px;
+        color: #ffd6d6;
       }
       .fp3d-through {
         position: absolute;
@@ -7486,6 +8355,18 @@ export class Fp3dView3d extends LitElement {
         margin-left: -4px;
         border-radius: 50%;
         box-shadow: 0 0 6px currentColor;
+      }
+      .fp3d-holo-more {
+        display: block;
+        margin: 6px 0 0 auto;
+        padding: 2px 9px;
+        border: 1px solid color-mix(in srgb, var(--fp3d-accent, #37e0ff) 45%, transparent);
+        border-radius: 9px;
+        background: transparent;
+        color: var(--fp3d-accent, #37e0ff);
+        font: 600 11px var(--fp3d-font);
+        cursor: pointer;
+        pointer-events: auto;
       }
       .fp3d-holo-mline {
         margin-top: 5px;
@@ -8125,10 +9006,10 @@ function formatPower(hass: HomeAssistant | undefined, w: number): string {
 }
 
 /** Marker height above furniture: in front of a screen, above wall units, else just above the top. */
-/** A running washer or dryer: a ring of light round its round door (#516); a dishwasher: its front. */
-function runGlow(type: string): ScreenState {
+/** A running washer or dryer: a ring of light round its round door (#516); a dishwasher or oven: its front. */
+function runGlow(kind: ApplianceKind): ScreenState {
   const color: [number, number, number] = [0.3, 0.85, 1];
-  return type === "washer" || type === "dryer" ? { color, level: 0.8, faces: [{ part: "drum", color, level: 0.8 }] } : { color, level: 0.8 };
+  return kind === "washer" || kind === "dryer" ? { color, level: 0.8, faces: [{ part: "drum", color, level: 0.8 }] } : { color, level: 0.8 };
 }
 
 /** Furniture nobody asks to see by voice (the floor itself, holes, helpers). */
@@ -8139,4 +9020,18 @@ function markerHeight(f: Furniture): number {
   // wall TV and wall cabinet: above the item (their height above the floor comes from mountBase)
   if (f.type === "tv_wall" || f.type === "kitchen_wall") return f.h + 0.25;
   return f.h + 0.35;
+}
+
+/** Where a style set from outside (an action, a voice command) is kept on this device. */
+const STYLE_OVERRIDE_KEY = "neonplan3d.style_override";
+
+const MODULE_FULL_KEY = "neonplan3d.module_full";
+
+function readModuleFull(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(MODULE_FULL_KEY) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
 }

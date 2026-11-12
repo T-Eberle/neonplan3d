@@ -45,6 +45,10 @@
           "name": "Etage",
           "description": "Nur die Räume dieser Etage (ihr Name im Plan)."
         },
+        "plan": {
+          "name": "Grundriss",
+          "description": "Nur dieser Grundriss (sein Name). Ohne ihn wird in allen Grundrissen gesucht; eine Durchsage ohne Räume geht an die Grundrisse auf dem Grundstück."
+        },
         "ignore_quiet": {
           "name": "Ruhezeit übergehen",
           "description": "Auch in Räumen sprechen, die gerade Ruhezeit haben. Ein einzelner, namentlich genannter Raum spricht immer."
@@ -56,6 +60,38 @@
         "screens": {
           "name": "Bildschirme",
           "description": "Nur die NeonPlan-Bildschirme mit diesen Bildschirmnamen (in den Einstellungen der Ansicht oder in der Kartenoption screen gesetzt)."
+        }
+      }
+    },
+    "reload_screens": {
+      "name": "Bildschirme neu laden",
+      "description": "Die offenen NeonPlan-Ansichten dieser Karten-Vorlagen laden ihre Seite neu, zum Beispiel nach einem Update, damit die Wand-Tablets die neue Version bekommen. Ohne Vorlage: jede offene Ansicht.",
+      "fields": {
+        "templates": {
+          "name": "Karten-Vorlagen",
+          "description": "Die IDs der Karten-Vorlagen (wie der Editor sie unter Einstellungen → Karten-Vorlagen zeigt). Leer: jede offene Ansicht."
+        },
+        "plan": {
+          "name": "Grundriss",
+          "description": "Nur die Ansichten dieses Grundrisses (seine ID, \"main\" für den ersten)."
+        }
+      }
+    },
+    "set_style": {
+      "name": "Stil setzen",
+      "description": "Die offenen NeonPlan-Bildschirme zeigen diesen Stil: Neon, Wohnlich, Wohnlich Abend und mehr. Ohne Bildschirme: jede offene Ansicht. Mit dem Stil reset zurück zur eigenen Einstellung.",
+      "fields": {
+        "style": {
+          "name": "Stil",
+          "description": "Eine Stil-Kennung (neon, blueprint, day, focus, synth, cozy, evening, winter, model, pastel, warm) oder ihr Name; reset: zurück zur eigenen Einstellung."
+        },
+        "screens": {
+          "name": "Bildschirme",
+          "description": "Nur die NeonPlan-Bildschirme mit diesen Bildschirmnamen (in den Einstellungen der Ansicht oder der Karten-Option screen). Leer: jede offene Ansicht."
+        },
+        "minutes": {
+          "name": "Minuten",
+          "description": "So lange, dann zurück zur eigenen Einstellung. Leer: bis zur nächsten Änderung."
         }
       }
     }

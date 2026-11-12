@@ -22,19 +22,28 @@ const common = {
 const viewerConfig = { ...common, entryPoints: ["src/viewer/viewer3d.ts"], outfile: `${out}/neonplan3d-3d.js` };
 // the card's visual editor only loads in the dashboard's card dialog
 // the language files (lang/*.json) are fetched with a hash of their content, so a new text is never stale
-const LANGS = ["fr", "es", "nl", "it", "hu", "da", "sv", "nb", "nn", "fi", "cs", "pl", "ro", "sl", "sk", "zh", "pt"];
+const LANGS = ["fr", "es", "nl", "it", "hu", "da", "sv", "nb", "nn", "fi", "cs", "pl", "ro", "sl", "sk", "zh", "pt", "tr"];
 const langHash = createHash("sha256")
-  .update(LANGS.map((l) => (existsSync(`lang/${l}.json`) ? readFileSync(`lang/${l}.json`) : "")).join("\n"))
+  // line endings normalised: a file written with CRLF on Windows must give the same hash as the LF copy CI checks out
+  .update(LANGS.map((l) => (existsSync(`lang/${l}.json`) ? readFileSync(`lang/${l}.json`, "utf8").replace(/\r\n/g, "\n") : "")).join("\n"))
   .digest("hex")
   .slice(0, 12);
 const cardEditorConfig = { ...common, entryPoints: ["src/card-editor.ts"], outfile: `${out}/neonplan3d-card-editor.js`, define: { __FP3D_LANG_HASH__: JSON.stringify(langHash) } };
+const version = JSON.parse(readFileSync("../custom_components/neonplan3d/manifest.json", "utf8")).version;
 // the editor is only needed by admins who open it, so it is a bundle of its own as well
-// (it draws furniture previews with the 3D bundle, so it knows that bundle's hash too)
-const editorConfig = (viewerHash, locateHash) => ({
+// (it draws furniture previews with the 3D bundle, so it knows that bundle's hash too; card templates use the card editor)
+const editorConfig = (viewerHash, locateHash, cardEditorHash) => ({
   ...common,
   entryPoints: ["src/components/editor.ts"],
   outfile: `${out}/neonplan3d-editor.js`,
-  define: { __FP3D_VIEWER_HASH__: JSON.stringify(viewerHash), __FP3D_LANG_HASH__: JSON.stringify(langHash), __FP3D_LOCATE_HASH__: JSON.stringify(locateHash) },
+  define: {
+    __FP3D_VIEWER_HASH__: JSON.stringify(viewerHash),
+    __FP3D_LANG_HASH__: JSON.stringify(langHash),
+    __FP3D_LOCATE_HASH__: JSON.stringify(locateHash),
+    __FP3D_CARD_EDITOR_HASH__: JSON.stringify(cardEditorHash),
+    // the overview of the open screens compares their versions with this one
+    __FP3D_VERSION__: JSON.stringify(version),
+  },
 });
 // the time travel (Pro) only loads when it starts; its texts come from the main bundle
 const timeTravelConfig = { ...common, entryPoints: ["src/timetravel/entry.ts"], outfile: `${out}/neonplan3d-timetravel.js` };
@@ -49,7 +58,6 @@ const importConfig = { ...common, entryPoints: ["src/import/app.ts"], outfile: "
 // The main bundle loads the 3D bundle with a hash of its content in the URL, so a new 3D bundle is
 // never taken from the browser cache (the integration version only changes after a restart).
 // the frontend knows its own version, to notice a backend that still runs an older one
-const version = JSON.parse(readFileSync("../custom_components/neonplan3d/manifest.json", "utf8")).version;
 const mainConfig = (viewerHash, editorHash, cardEditorHash, timeTravelHash, funHash, voiceHash, locateHash) => ({
   ...common,
   entryPoints: ["src/main.ts"],
@@ -88,7 +96,13 @@ function copyFonts() {
   }
 }
 
-// fork: main 750 KB, editor 970 KB and card editor 284 KB on 2026-11-01 for the calendar points (calendar.ts: the card, its date styles, own formats and places, the settings, the point's form and their texts)
+// main 810 KB, editor 1040 KB and card editor 318 KB on 2026-11-04 for several floor plans (3.0), the overview of all plans with
+// their warnings, and cards for some rooms (the map to tap them on): the plan picker, the controller
+// switching plans, the editor's ⚙ → Floor plans (new, copy, from a file, names, icons, order, the bin) and their texts
+// editor 1012 KB on 2026-11-03 for the overview of the open screens and its texts
+// card editor 306 KB on 2026-11-03 for the template's values in its form and the link to NeonPlan's editor
+// main 780 KB and editor 1004 KB on 2026-11-03 for room actions (vacuum this room, everything off) and "here"/"there" by voice
+// main 772 KB, editor 996 KB and card editor 300 KB on 2026-11-03 for card templates (made in the editor, picked on a tablet) and their texts
 // main 674 KB and 3D 812 KB on 2026-10-22 for richer module cards (a state line, a second value, a chain, cells, a hint), module markers and solid module pipes
 // main 668 KB and 3D 808 KB on 2026-10-22 for what modules may draw: lines in the flow layer, surfaces over floors and lawns, labels, layered light on an item, a card curve, fields on furniture and module settings
 // 3D 796 KB and editor 916 KB on 2026-10-21 for roof sections that cut each other, wings meeting a roof in valleys (#466, #605) and the ends per section
@@ -142,20 +156,31 @@ function copyFonts() {
 // main 730 KB, editor 951 KB on 2026-10-31: Slovak as a language, the glass cards' size in the ⚙ menu for everyone
 // main 729 KB, card editor 279 KB on 2026-10-31: the card editor offers start room, 3D lock, keep view, walk, controls side and the time travel range and speed, with their texts
 // 3D 837 KB on 2026-10-31: the light of every lamp kept while a colour effect only recolours it (#885)
+// main 734 KB, 3D 841 KB, editor 958 KB, card editor 281 KB on 2026-11-01: gates in fences (#818), the plain floor plan without furniture, right click back – with their texts
 // editor 950 KB on 2026-10-31: templates leave out every entity, wherever it stands (#855), and the room-tap setting in the editor (#883)
 // main 728 KB, editor 949 KB, card editor 276 KB on 2026-10-31: the room of this device and of the card (`voice_area`) for sentences without a room ("Licht an") and their texts
-const BUDGET = { "neonplan3d.js": 750 * 1024, "neonplan3d-fun.js": 40 * 1024, "neonplan3d-voice.js": 60 * 1024, "neonplan3d-locate.js": 160 * 1024, "neonplan3d-timetravel.js": 120 * 1024, "neonplan3d-3d.js": 837 * 1024, "neonplan3d-editor.js": 970 * 1024, "neonplan3d-card-editor.js": 284 * 1024 };
+// main 739 KB, editor 968 KB, card editor 284 KB on 2026-11-01: NeonPlan Print for supporters (card on Extensions, "new" dot, "Print in 3D" in the editor) with its texts
+// main 738 KB, 3D 842 KB, editor 964 KB, card editor 283 KB on 2026-11-01 (2.2.0): sloping free walls (#834), terrace roofs at thick walls and an overhang per side (#863), the sun arc around the whole plot (#833), the cable hub and the inverter cable to the grid point (#841), light-well depth (#890), soft sun patches (#819) – with their texts
+// editor 982 KB on 2026-11-03: the fun packs in ⚙ Settings (moved from the extensions page)
+// main 764 KB, 3D 850 KB, editor 978 KB, card editor 290 KB on 2026-11-03: winter – fairy lights along the eaves, snow on roof and lawn, the New Year's firework, their settings and texts
+// main 760 KB, 3D 844 KB on 2026-11-03: overhangs set by hand cut the walls under them (#921), slat-only blinds by their tilt (#920), a module glow on the top plate (#917)
+// editor 976 KB on 2026-11-03: the winter pack on the extensions page (Advent candles by date) with its texts
+// main 758 KB, editor 974 KB, card editor 288 KB on 2026-11-02: "only show while …" for furniture and its texts
+// main 756 KB, editor 970 KB, card editor 286 KB on 2026-11-02: the room bar (a card per room with a light switch, the favourites before them) with its texts
+// main 830 KB, 3D 870 KB, editor 1070 KB on 2026-11-05: duplicate floor, top-hung windows, camera pop-up, lift-and-slide doors
+// 3D 900 KB, editor 1100 KB, card editor 340 KB on 2026-11-11: the styles (palettes, natural materials, wall colours, contact shadows)
+const BUDGET = { "neonplan3d.js": 870 * 1024, "neonplan3d-fun.js": 40 * 1024, "neonplan3d-voice.js": 60 * 1024, "neonplan3d-locate.js": 160 * 1024, "neonplan3d-timetravel.js": 120 * 1024, "neonplan3d-3d.js": 900 * 1024, "neonplan3d-editor.js": 1100 * 1024, "neonplan3d-card-editor.js": 340 * 1024 };
 
 copyFonts();
 if (watch) {
   // in watch mode the hash is not tracked; a dev reload fetches the bundle anyway
-  for (const c of [viewerConfig, editorConfig("dev", "dev"), cardEditorConfig, timeTravelConfig, funConfig, voiceConfig, locateConfig, mainConfig("dev", "dev", "dev", "dev", "dev", "dev", "dev")]) await (await context(c)).watch();
+  for (const c of [viewerConfig, editorConfig("dev", "dev", "dev"), cardEditorConfig, timeTravelConfig, funConfig, voiceConfig, locateConfig, mainConfig("dev", "dev", "dev", "dev", "dev", "dev", "dev")]) await (await context(c)).watch();
 } else {
   await build(viewerConfig);
   await build(locateConfig);
-  const editor = editorConfig(hashOf(viewerConfig.outfile), hashOf(locateConfig.outfile));
-  await build(editor);
   await build(cardEditorConfig);
+  const editor = editorConfig(hashOf(viewerConfig.outfile), hashOf(locateConfig.outfile), hashOf(cardEditorConfig.outfile));
+  await build(editor);
   await build(timeTravelConfig);
   await build(funConfig);
   await build(voiceConfig);

@@ -2,7 +2,7 @@
 // names in the events sheet. Rooms come from Home Assistant's areas, the devices placed in the plan, linked
 // furniture and the windows' sensors.
 
-import { pointInPolygon, type Building } from "../model.ts";
+import { pointInPolygon, zonesOf, type Building } from "../model.ts";
 import { entityAreaId } from "../devices.ts";
 import type { HomeAssistant } from "../types.ts";
 import type { HistorySpec } from "./types.ts";
@@ -38,7 +38,8 @@ export function roomEntities(hass: HomeAssistant, building: Building, spec: Pick
   const openings = new Map(spec.openings);
   const furniture = new Map(spec.furniture);
   for (const floor of building.floors) {
-    for (const room of floor.rooms) {
+    // the rooms and the outdoor areas with an area of their own (a balcony with its sensor, #974)
+    for (const room of zonesOf(floor)) {
       if (room.points.length < 3) continue;
       const ids = new Set<string>(room.area_id ? (byArea.get(room.area_id) ?? []) : []);
       for (const p of floor.placements) if (pointInPolygon([p.x, p.z], room.points)) ids.add(p.entity_id);
@@ -63,7 +64,15 @@ export function roomEntities(hass: HomeAssistant, building: Building, spec: Pick
         lights: all.filter((id) => domainOf(id) === "light"),
         windows,
         climates: all.filter((id) => domainOf(id) === "climate"),
-        temps: all.filter((id) => domainOf(id) === "sensor" && cls(id) === "temperature"),
+        // the room's own temperature when one is set (⚙ Room climate); else the temperature sensors of its area without
+        // the comfort indices some integrations add (dew point, frost point, humidex …, #1032)
+        temps: (() => {
+          const own = (room as { climate?: { temperature?: string | null } | null }).climate?.temperature;
+          if (own && hass.states[own]) return [own];
+          const index = /dew|frost|humidex|heat_?index|simmer|wind_?chill|apparent|feels|taupunkt|gef(ü|ue)hlt|perceived|comfort/i;
+          const name = (id: string) => `${id} ${String(hass.states[id]?.attributes.friendly_name ?? "")}`;
+          return all.filter((id) => domainOf(id) === "sensor" && cls(id) === "temperature" && !index.test(name(id)));
+        })(),
         all,
       });
     }
