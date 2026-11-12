@@ -4,6 +4,14 @@ All notable changes to NeonPlan 3D. The full notes in German and English are on 
 [releases page](https://github.com/Mastershort/neonplan3d/releases). Ideas and votes:
 [Discussions → Ideas](https://github.com/Mastershort/neonplan3d/discussions/categories/ideas).
 
+## 3.1.1.2 (fork)
+
+### Changed
+
+- **Calendar events in "Today in the household":** the events of the calendars no longer float on their own cards at invisible points in the plan. They show in the glass card "Today in the household", in their own section **Events** below the household's rows – all chosen calendars together, sorted by time; a tap on an event opens its calendar, a tap on **Events** folds the section on this device. Without Haushalt Pro the card holds only the events.
+- **⚙ Settings → 📅 Calendar** chooses the calendars (add, remove) and keeps the number of events, days ahead, the date style with the own format, the place and whether the section starts open. Per-point settings (own number, always open) are gone.
+- **Calendar points are cleaned up:** the furniture "Calendar point" is gone from the library. Points already set are removed when Home Assistant loads the plan (and in the editor); their calendars join the list in the settings, so nothing has to be chosen again.
+
 ## 3.1.1.1 (fork)
 
 A private fork of 3.1.1; packs and Pro add-ons from the shop keep working (same domain, same keys). The fix for blinds on outer walls drawn in several pieces (2.1.0.2) is in the official release now.

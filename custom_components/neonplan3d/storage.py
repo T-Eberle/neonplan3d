@@ -42,6 +42,7 @@ from .const import (
     STORAGE_MINOR_VERSION,
     STORAGE_VERSION,
 )
+from .fork_calendar import drop_calendar_points
 from .packs import module_sha
 from .schema import BUILDING_SCHEMA, empty_building, image_ids
 
@@ -140,6 +141,10 @@ class PlanData:
         if stored:
             self.building = complete(stored.get("building") or empty_building())
             self.revision = int(stored.get("revision", 0))
+            # fork: the calendar points of 3.1.1.1 and before are cleaned up once, stored right away
+            if drop_calendar_points(self.building):
+                await self._building_store.async_save({"revision": self.revision, "building": self.building})
+                _LOGGER.info("Plan %s: calendar points moved into the household card's calendars", self.id)
         history = await self._history_store.async_load()
         self._history = list((history or {}).get("snapshots", []))
 

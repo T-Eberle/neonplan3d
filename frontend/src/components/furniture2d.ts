@@ -243,14 +243,6 @@ export function furnitureSymbol(type: string, w: number, d: number): Part[] | ty
       );
       return out;
     }
-    case "x_calendar": {
-      // a calendar sheet: the header with its two rings and a grid of days
-      const hw = w / 2 - 0.04;
-      const hd = d / 2 - 0.04;
-      const out: Part[] = [rect(-hw, -hd, hw, hd), rect(-hw, -hd, hw, -hd + d * 0.22, "fp3d-sym-fill"), line(-w * 0.2, -d / 2, -w * 0.2, -hd + d * 0.08, "fp3d-sym-strong"), line(w * 0.2, -d / 2, w * 0.2, -hd + d * 0.08, "fp3d-sym-strong")];
-      for (let r = 0; r < 2; r++) for (let c = 0; c < 3; c++) out.push(circle(-w * 0.2 + c * w * 0.2, -d * 0.02 + r * d * 0.2, Math.min(w, d) * 0.035));
-      return out;
-    }
     default: {
       const item = packItem(type);
       return item ? packSymbol(item, w, d) : nothing;

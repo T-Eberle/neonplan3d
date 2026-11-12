@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { calendarLines, calendarPoints, countOf, daysOf, dayKey, eventsOf, formatWhen, upcoming, type CalEvent, type WhenWords } from "./calendar.ts";
-import type { Floor, Furniture } from "./model.ts";
+import { calendarEntities, calendarLines, countOf, daysOf, dayKey, dropCalendarPoints, eventsOf, formatWhen, upcoming, type CalEvent, type WhenWords } from "./calendar.ts";
+import type { Building } from "./model.ts";
 
 const TZ = "Europe/Berlin";
 const words: WhenWords = { now: "Jetzt", today: "Heute", tomorrow: "Morgen", allDay: "ganztägig" };
@@ -127,21 +127,40 @@ test("lines mark what runs and what is today", () => {
   );
 });
 
-test("how many events and days: the point's own, the house's, then the defaults, within limits", () => {
-  assert.equal(countOf({ x_cal_count: 3 }, { count: 8 }), 3);
-  assert.equal(countOf({ x_cal_count: null }, { count: 8 }), 8);
-  assert.equal(countOf({}, null), 5);
-  assert.equal(countOf({ x_cal_count: 0 }, null), 1);
-  assert.equal(countOf({ x_cal_count: 500 }, null), 20);
+test("how many events and days: the house's, then the defaults, within limits", () => {
+  assert.equal(countOf({ count: 8 }), 8);
+  assert.equal(countOf(null), 5);
+  assert.equal(countOf({ count: 0 }), 1);
+  assert.equal(countOf({ count: 500 }), 20);
   assert.equal(daysOf(null), 14);
   assert.equal(daysOf({ days: 400 }), 90);
 });
 
-test("calendar points: only x_calendar items with a calendar entity", () => {
-  const item = (id: string, type: string, x_cal_entity?: string | null) => ({ id, type, x: 0, z: 0, rotation: 0, w: 0.4, d: 0.4, h: 1.6, variant: null, x_cal_entity }) as Furniture;
-  const floor = { id: "eg", furniture: [item("a", "x_calendar", "calendar.familie"), item("b", "x_calendar", null), item("c", "x_calendar", "sensor.x"), item("d", "sofa", "calendar.familie")] } as unknown as Floor;
+test("the chosen calendars: only calendar entities, each once", () => {
+  assert.deepEqual(calendarEntities({ entities: ["calendar.familie", "sensor.x", "calendar.familie", "calendar.arbeit"] }), ["calendar.familie", "calendar.arbeit"]);
+  assert.deepEqual(calendarEntities(null), []);
+});
+
+test("a line knows its calendar (a tap opens it)", () => {
+  const e = [{ ...timed("Zahnarzt", "2026-11-01T13:00:00Z", "2026-11-01T14:00:00Z"), calendar: "calendar.familie" }];
+  assert.equal(calendarLines(e, NOW, 5, words, "de", TZ)[0].calendar, "calendar.familie");
+});
+
+test("the old calendar points are cleaned up: their calendars join the settings, the points leave the plan", () => {
+  const item = (id: string, type: string, x_cal_entity?: string | null) => ({ id, type, x: 0, z: 0, rotation: 0, w: 0.4, d: 0.4, h: 1.6, variant: null, x_cal_entity });
+  const b = {
+    settings: { x_calendar: { count: 3, entities: ["calendar.arbeit"] } },
+    floors: [
+      { id: "eg", furniture: [item("a", "x_calendar", "calendar.familie"), item("b", "x_calendar", null), item("d", "sofa")] },
+      { id: "og", furniture: [item("c", "x_calendar", "calendar.arbeit"), item("e", "x_calendar", "sensor.x")] },
+    ],
+  } as unknown as Building;
+  assert.equal(dropCalendarPoints(b), true);
   assert.deepEqual(
-    calendarPoints([floor]).map((p) => [p.item.id, p.entity]),
-    [["a", "calendar.familie"]],
+    b.floors.map((f) => f.furniture.map((m) => m.id)),
+    [["d"], []],
   );
+  assert.deepEqual(b.settings.x_calendar, { count: 3, entities: ["calendar.arbeit", "calendar.familie"] });
+  // a clean plan stays as it is
+  assert.equal(dropCalendarPoints(b), false);
 });

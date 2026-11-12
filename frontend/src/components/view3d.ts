@@ -64,7 +64,7 @@ function waterText(hass: HomeAssistant, v: number, unit: string): string {
 }
 
 interface HoloCard {
-  kind: "main" | "plant" | "device" | "media" | "car" | "module" | "bin" | "calendar";
+  kind: "main" | "plant" | "device" | "media" | "car" | "module" | "bin";
   /**
    * Haushalt Pro: the tag of a waste bin that goes out – its colour and when ("Tomorrow") – or of bins standing
    * together (one line each, in pickup order), a mailbox with post or a thirsty plant (a round symbol from afar).
@@ -72,8 +72,6 @@ interface HoloCard {
   bin?: { lines: { color: string; when: string; name: string; soon: boolean; out: boolean }[]; soon: boolean; icon: "mail" | "plant" | null };
   /** A module's small label, drawn like a bin's tag. */
   tag?: boolean;
-  /** A calendar point: its item, its calendar, the lines of its next events (null while they are fetched) and whether it always stays open. */
-  calendar?: { id: string; entity: string; lines: CalLine[] | null; fixed: boolean };
   /** A module's card (Pool Pro: the pool), drawn by the host from what the module says. */
   module?: ModuleCard;
   name: string;
@@ -88,10 +86,6 @@ interface HoloCard {
   /** A battery of this plant (the nearest one on its floor). */
   battery: { soc: number | null; w: number | null } | null;
 }
-
-/** A calendar point's card: the edge of its lines, and of an event running now (the green of a bin put out). */
-const CAL_COLOR = "#37e0ff";
-const CAL_NOW_COLOR = "#4ddf7a";
 
 /** How long a detection pin stays after its sensor dropped back. */
 const DETECT_LINGER_MS = 120000;
@@ -164,7 +158,7 @@ import { Director, HOLD_DEFAULT, directorAny, doorbellCamera, doorbellEntities, 
 import type { HistorySpec, ReplayInfo } from "../timetravel/types.ts";
 import { sunPath, type SunPath } from "../sun-path.ts";
 import { hourCycle } from "../units.ts";
-import { calendarLines, calendarPoints, countOf, daysOf, fetchEvents, type CalEvent, type CalLine } from "../calendar.ts";
+import { calendarEntities, calendarLines, countOf, daysOf, fetchEvents, type CalEvent } from "../calendar.ts";
 
 /** Which HTML markers are shown: none, only what has no 3D object or shows a value, or all. */
 /** "room": no symbols in the house and floor views, in a room only that room's (D477, D595). */
@@ -187,6 +181,19 @@ function ownButtonOn(hass: HomeAssistant, btn: CustomButton): boolean {
 }
 
 /** A remembered switch of this browser (storage may be blocked: then off). */
+/** Fork: where a device keeps whether the household card's calendar section is folded. */
+const CAL_FOLD_KEY = "neonplan3d.calFolded";
+
+/** Fork: the calendar section's fold kept on this device (null: never tapped, the settings decide). */
+function readStoredFold(): boolean | null {
+  try {
+    const v = localStorage.getItem(CAL_FOLD_KEY);
+    return v === null ? null : v === "1";
+  } catch {
+    return null;
+  }
+}
+
 function readFlag(key: string): boolean {
   try {
     return localStorage.getItem(key) === "1";
@@ -369,6 +376,8 @@ export class Fp3dView3d extends LitElement {
     _alerts: { state: true },
     _household: { state: true },
     _hhFolded: { state: true },
+    _calEvents: { state: true },
+    _calFolded: { state: true },
     _binInfo: { state: true },
     _gangMenu: { state: true },
     householdCard: { attribute: false },
@@ -596,6 +605,14 @@ export class Fp3dView3d extends LitElement {
   /** Haushalt Pro: what is due in the household now (the glass card "Today in the household"). */
   private declare _household: HouseholdItem[];
   private declare _hhFolded: boolean;
+  /** Fork: the events of the calendars chosen in the settings, by calendar (null: none chosen or not fetched yet). */
+  private declare _calEvents: Map<string, CalEvent[]> | null;
+  /** Fork: the household card's calendar section folded on this device (null: as the settings say). */
+  private declare _calFolded: boolean | null;
+  private calKey = "";
+  private calTimer: ReturnType<typeof setInterval> | undefined;
+  private calFetch: (() => void) | undefined;
+  private calChanged = new Map<string, string>();
   /** Haushalt Pro: the bin tapped – its next pickups in a small pop-up. */
   private declare _binInfo: { furnitureId: string; x: number; y: number } | null;
   /** A wall switch or socket with several gangs: its small menu (one button per gang). */
@@ -696,12 +713,6 @@ export class Fp3dView3d extends LitElement {
   private pickups = new Map<string, Pickup[]>();
   private pickupKey = "";
   private householdTimer: ReturnType<typeof setInterval> | undefined;
-  /** Calendar points: the fetched events by calendar, what was fetched and when the calendars last changed. */
-  private calEvents = new Map<string, CalEvent[]>();
-  private calKey = "";
-  private calTimer: ReturnType<typeof setInterval> | undefined;
-  private calFetch: (() => void) | undefined;
-  private calChanged = new Map<string, string>();
   /** Haushalt Pro: small holograms – bins that go out today or tomorrow, post, a thirsty plant (set by the furniture pass). */
   private binHolos: HouseholdTag[] = [];
   /** Haushalt Pro: appliances that ended their program while the page is open ("finished" until the door opens). */
@@ -840,6 +851,8 @@ export class Fp3dView3d extends LitElement {
     this._alerts = [];
     this._household = [];
     this._hhFolded = readFlag("neonplan3d.hhFolded");
+    this._calEvents = null;
+    this._calFolded = readStoredFold();
     this._binInfo = null;
     this._gangMenu = null;
     this.householdCard = true;
@@ -956,6 +969,7 @@ export class Fp3dView3d extends LitElement {
     this.householdTimer = undefined;
     clearInterval(this.calTimer);
     this.calTimer = undefined;
+    this.calKey = "";
     clearTimeout(this.fridgeTimer);
     clearTimeout(this.sensorTimer);
     this.sensorTimer = undefined;
@@ -1224,6 +1238,8 @@ export class Fp3dView3d extends LitElement {
     const b = this.conditioned();
     if (!v || !b || !this.hass) return;
     const hass = this.hass;
+    // fork: the household card's calendars (cheap when nothing changed; an event's start or end fetches again)
+    this.watchCalendar(hass, b);
     if (force || !this.openingLinks || this.linkedRegistry !== hass.entities) {
       this.openingLinks = openingEntities(hass, b.floors);
       this.furnitureLinks = furnitureEntities(hass, b.floors);
@@ -1231,7 +1247,6 @@ export class Fp3dView3d extends LitElement {
       this.findIndex = null;
       this.alertSrc = this.alerts ? alertSources(hass, b, this.weatherEntityId) : null;
       this.watchHousehold(hass, b);
-      this.watchCalendar(hass, b);
       this.watched = watchedEntities(hass, b, {
         openings: this.openingLinks,
         furniture: this.furnitureLinks,
@@ -1679,29 +1694,6 @@ export class Fp3dView3d extends LitElement {
         anchors.push({ p: [g.x, floor.elevation + g.y + 0.04, g.z], n: [0, 1, 0], floorId: g.floorId, size: holoSize * 0.75, roof: false, views: "all", room: roomAt(floor, g.x, g.z) });
         const lines = g.lines.map((t) => ({ color: t.color, when: t.when, name: t.name, soon: !!t.soon && !t.out, out: !!t.out }));
         cards.push({ kind: "bin", name: g.lines.map((t) => t.name).join(", "), w: null, dayIds: [], battery: null, bin: { lines, soon: lines.some((l) => l.soon), icon: g.lines.length === 1 ? (g.lines[0].icon ?? null) : null } });
-      }
-    }
-    // calendar points: an invisible point in the plan with the next events of its calendar (not in the time travel)
-    if (!this.replay) {
-      const holoSize = (b.settings.roof.hologram ?? DEFAULT_HOLOGRAM).size;
-      const settings = b.settings.x_calendar;
-      const words = { now: translate(hass, "cal_now"), today: translate(hass, "cal_today"), tomorrow: translate(hass, "cal_tomorrow"), allDay: translate(hass, "cal_all_day") };
-      const lang = (hass.language || "en").replace("_", "-");
-      for (const { floor, item, entity } of calendarPoints(b.floors)) {
-        // an event that begins or ends changes the calendar's state: fetch again right away
-        const changed = hass.states[entity]?.last_changed ?? "";
-        if (this.calChanged.has(entity) && this.calChanged.get(entity) !== changed) this.calFetch?.();
-        this.calChanged.set(entity, changed);
-        const events = this.calEvents.get(entity);
-        anchors.push({ p: [item.x, floor.elevation + mountBase(floor, item) + item.h, item.z], n: [0, 1, 0], floorId: floor.id, size: holoSize * 0.7, roof: false, views: "all", room: roomAt(floor, item.x, item.z) });
-        cards.push({
-          kind: "calendar",
-          name: item.name || String(hass.states[entity]?.attributes.friendly_name ?? entity),
-          w: null,
-          dayIds: [],
-          battery: null,
-          calendar: { id: item.id, entity, lines: events ? calendarLines(events, this.now(), countOf(item, settings), words, lang, hass.config?.time_zone, hourCycle(hass), settings) : null, fixed: !!item.x_cal_fixed },
-        });
       }
     }
     v.setSound(sound);
@@ -2152,8 +2144,8 @@ export class Fp3dView3d extends LitElement {
     if (el.hidden !== hidden) el.hidden = hidden;
     if (link && link.hasAttribute("hidden") !== hidden) link.toggleAttribute("hidden", hidden);
     if (!on) return;
-    if (card?.kind === "bin" || card?.kind === "calendar") {
-      // a tag (and a calendar point's card, drawn like one): centred on its point (the lid), standing on it, no link line; never smaller than readable
+    if (card?.kind === "bin") {
+      // a tag: centred on its point (the lid), standing on it, no link line; never smaller than readable
       let t = Math.max(0.6, scale * 0.8);
       // a mailbox's or a plant's tag from afar: a round symbol of its own size instead of tiny text
       const far = !!card.bin?.icon && scale * 0.8 < 0.62;
@@ -2232,93 +2224,15 @@ export class Fp3dView3d extends LitElement {
   private renderHologram() {
     const e = this._energy;
     // Haushalt Pro's tags (bins, post, a thirsty plant) are no energy holograms: they show on their own
-    const tagsOnly = () => this._holos.map((card, i) => (card.kind === "bin" ? this.renderBinCard(card, i) : card.kind === "calendar" ? this.renderCalendarCard(card, i) : nothing));
-    // calendar points need no Pro add-on either
-    const calendars = this._holos.some((c) => c.kind === "calendar");
+    const tagsOnly = () => this._holos.map((card, i) => (card.kind === "bin" ? this.renderBinCard(card, i) : nothing));
     // a module with a card or a label of its own needs no Pro add-on for them
     const fromModule = this._holos.some((c) => c.kind === "module" || c.tag);
     // the editor keeps the energy bar off but asks for the holograms in its energy tool
-    if (!(fromModule || hasFeature("energy_pro") || hasFeature("sound") || hasFeature("auto_pro") || hasFeature("pool") || hasFeature("household")) || (this.roomId && !(this.building?.settings.roof.hologram ?? DEFAULT_HOLOGRAM).device_room) || !(this.showEnergy || this.holograms) || !this.holoVisible()) return hasFeature("household") || fromModule || calendars ? tagsOnly() : nothing;
+    if (!(fromModule || hasFeature("energy_pro") || hasFeature("sound") || hasFeature("auto_pro") || hasFeature("pool") || hasFeature("household")) || (this.roomId && !(this.building?.settings.roof.hologram ?? DEFAULT_HOLOGRAM).device_room) || !(this.showEnergy || this.holograms) || !this.holoVisible()) return hasFeature("household") || fromModule ? tagsOnly() : nothing;
     // the plants' cards belong to the house view – with a single floor that floor is the house view (#255)
     const house = this.floorId === null || (this.building?.floors.length ?? 0) <= 1;
     const plants = !!e && (e.solar !== null || e.grid !== null || e.battery !== null) && house;
-    return this._holos.map((card, i) => (card.kind === "module" ? this.renderModuleCard(card, i) : card.kind === "bin" ? this.renderBinCard(card, i) : card.kind === "calendar" ? this.renderCalendarCard(card, i) : card.kind === "car" ? this.renderCarCard(card, i) : card.kind === "media" ? this.renderMediaCard(card, i) : card.kind === "device" ? this.renderDeviceCard(card, i) : plants ? this.renderHoloCard(card, i, e!) : nothing));
-  }
-
-  /**
-   * Fetches the events of the calendar points' calendars: now, every ten minutes while the page is shown and when a
-   * calendar's state changes (an event begins or ends). Nothing in the time travel.
-   */
-  private watchCalendar(hass: HomeAssistant, b: Building): void {
-    const ids = this.replay ? [] : [...new Set(calendarPoints(b.floors).map((p) => p.entity))];
-    const days = daysOf(b.settings.x_calendar);
-    const key = `${ids.join(",")}|${days}`;
-    if (!ids.length) {
-      clearInterval(this.calTimer);
-      this.calTimer = undefined;
-      this.calFetch = undefined;
-      this.calKey = "";
-      this.calEvents = new Map();
-      this.calChanged.clear();
-      return;
-    }
-    if (key === this.calKey && this.calTimer) return;
-    this.calKey = key;
-    this.calFetch = () =>
-      void fetchEvents(this.hass ?? hass, ids, days).then((events) => {
-        if (this.calKey !== key) return;
-        this.calEvents = events;
-        this.syncDevices(true);
-      });
-    clearInterval(this.calTimer);
-    this.calTimer = setInterval(() => !document.hidden && this.calFetch?.(), 600_000);
-    this.calFetch();
-  }
-
-  /**
-   * A calendar point's card: the calendar's next events, drawn like the waste bins' tags (the same plate, the same
-   * lines, its text following the symbol size). A tap folds it to a small 📅 with the number of today's events and
-   * opens it again; each device keeps that for itself (a wall tablet may want it folded). A fixed point's card always
-   * stays open and lets taps through to the house, like a bin's tag.
-   */
-  private renderCalendarCard(card: HoloCard, index: number) {
-    const c = card.calendar!;
-    const t = (k: I18nKey) => translate(this.hass, k);
-    const flag = `neonplan3d.calToggled.${c.id}`;
-    const open = c.fixed || (this.building?.settings.x_calendar?.open !== false) !== readFlag(flag);
-    const toggle = (ev: Event) => {
-      ev.stopPropagation();
-      writeFlag(flag, !readFlag(flag));
-      this.requestUpdate();
-    };
-    const today = c.lines?.filter((l) => l.today).length ?? 0;
-    return html`<div
-      class="fp3d-holo fp3d-holo-bin fp3d-holo-multi fp3d-holo-cal ${c.fixed ? "fp3d-holo-cal-fixed" : ""} ${open ? "" : "fp3d-holo-cal-min"} ${this._low ? "fp3d-holo-plain" : ""}"
-      data-holo=${index}
-      hidden
-      role=${c.fixed ? "note" : "button"}
-      tabindex=${c.fixed ? -1 : 0}
-      aria-expanded=${c.fixed ? nothing : open}
-      aria-label=${card.name}
-      style="--bin:${CAL_COLOR}"
-      @click=${c.fixed ? nothing : toggle}
-    >
-      <div class="fp3d-holo-body fp3d-holo-lines">
-        <div class="fp3d-cal-head"><span>📅${open ? ` ${card.name}` : ""}</span>${today ? html`<span class="fp3d-cal-badge" title=${t("cal_today")}>${today}</span>` : nothing}</div>
-        ${!open
-          ? nothing
-          : c.lines === null
-            ? html`<div class="fp3d-cal-empty">…</div>`
-            : c.lines.length
-              ? c.lines.map(
-                  (l) =>
-                    html`<div class="fp3d-holo-line ${l.today ? "" : "fp3d-holo-line-later"} ${l.now ? "fp3d-holo-line-out" : ""}" style="--bin:${l.now ? CAL_NOW_COLOR : CAL_COLOR}">
-                      <b>${l.when}</b><span>${l.title}</span>${l.location ? html`<i class="fp3d-cal-loc">📍 ${l.location}</i>` : nothing}
-                    </div>`,
-                )
-              : html`<div class="fp3d-cal-empty">${t("cal_none")}</div>`}
-      </div>
-    </div>`;
+    return this._holos.map((card, i) => (card.kind === "module" ? this.renderModuleCard(card, i) : card.kind === "bin" ? this.renderBinCard(card, i) : card.kind === "car" ? this.renderCarCard(card, i) : card.kind === "media" ? this.renderMediaCard(card, i) : card.kind === "device" ? this.renderDeviceCard(card, i) : plants ? this.renderHoloCard(card, i, e!) : nothing));
   }
 
   /** Haushalt Pro: a waste bin's small hologram – when it goes out, in the bin's colour. */
@@ -4137,23 +4051,112 @@ export class Fp3dView3d extends LitElement {
     </div>`;
   }
 
-  /** Haushalt Pro: the glass card "Today in the household" – what is due, tapped it opens the entity. */
+  /**
+   * Haushalt Pro: the glass card "Today in the household" – what is due, tapped it opens the entity. Fork: below it
+   * the next events of the calendars chosen in ⚙ Settings → Calendar, in their own section that folds on its own
+   * (that needs no Pro add-on: without Haushalt Pro the card holds only the calendar).
+   */
   private renderHousehold() {
-    if (!this._household.length || !this.householdCard || !hasFeature("household") || this.panelOpen) return nothing;
+    if (!this.householdCard || this.panelOpen) return nothing;
+    const items = hasFeature("household") ? this._household : [];
+    const cal = this.calendarSection();
+    if (!items.length && !cal) return nothing;
     const fold = () => {
       this._hhFolded = !this._hhFolded;
       writeFlag("neonplan3d.hhFolded", this._hhFolded);
     };
+    const open = (entity: string) => (this.ro ? this.showInfo(entity, 0, 0) : openMoreInfo(this, entity));
     return html`<div class="fp3d-hh ${this._hhFolded ? "fp3d-hh-folded" : ""}">
-      <button class="fp3d-hh-head" aria-expanded=${!this._hhFolded} @click=${fold}>🏠 ${translate(this.hass, "hh_title")} <b>${this._household.length}</b></button>
+      <button class="fp3d-hh-head" aria-expanded=${!this._hhFolded} @click=${fold}>🏠 ${translate(this.hass, "hh_title")} ${items.length + (cal?.today ?? 0) ? html`<b>${items.length + (cal?.today ?? 0)}</b>` : nothing}</button>
       ${this._hhFolded
         ? nothing
-        : this._household.map(
-            (it) => html`<button class="fp3d-hh-row ${it.hot ? "fp3d-hh-hot" : ""}" ?disabled=${!it.entity} @click=${() => it.entity && (this.ro ? this.showInfo(it.entity, 0, 0) : openMoreInfo(this, it.entity))}>
+        : html`${items.map(
+            (it) => html`<button class="fp3d-hh-row ${it.hot ? "fp3d-hh-hot" : ""}" ?disabled=${!it.entity} @click=${() => it.entity && open(it.entity)}>
               <span class="fp3d-hh-icon"><ha-icon icon=${`mdi:${it.icon}`} style="--mdc-icon-size:18px"></ha-icon></span><span>${it.text}</span>
             </button>`,
           )}
+          ${cal
+            ? html`<button class="fp3d-hh-head fp3d-hh-cal-head ${items.length ? "" : "fp3d-hh-cal-only"}" aria-expanded=${cal.open} @click=${() => this.foldCalendar(!cal.open)}>
+                  📅 ${translate(this.hass, "cal_title")} ${cal.today ? html`<b>${cal.today}</b>` : nothing}
+                </button>
+                ${!cal.open
+                  ? nothing
+                  : cal.lines === null
+                    ? html`<div class="fp3d-hh-cal-empty">…</div>`
+                    : cal.lines.length
+                      ? cal.lines.map(
+                          (l) => html`<button class="fp3d-hh-row fp3d-hh-cal ${l.today ? "fp3d-hh-cal-today" : ""} ${l.now ? "fp3d-hh-cal-now" : ""}" ?disabled=${!l.calendar} @click=${() => l.calendar && open(l.calendar)}>
+                            <span class="fp3d-hh-icon"><ha-icon icon=${l.now ? "mdi:calendar-clock" : "mdi:calendar"} style="--mdc-icon-size:18px"></ha-icon></span>
+                            <span class="fp3d-hh-cal-text"><b>${l.when}</b><span>${l.title}</span>${l.location ? html`<i>📍 ${l.location}</i>` : nothing}</span>
+                          </button>`,
+                        )
+                      : html`<div class="fp3d-hh-cal-empty">${translate(this.hass, "cal_none")}</div>`}`
+            : nothing}`}
     </div>`;
+  }
+
+  /** Fork: the household card's calendar section – its lines (null while fetched), today's count and whether it is open. */
+  private calendarSection(): { lines: ReturnType<typeof calendarLines> | null; today: number; open: boolean } | null {
+    const hass = this.hass;
+    const settings = this.building?.settings.x_calendar;
+    if (!hass || this.replay || !calendarEntities(settings).length) return null;
+    const words = { now: translate(hass, "cal_now"), today: translate(hass, "cal_today"), tomorrow: translate(hass, "cal_tomorrow"), allDay: translate(hass, "cal_all_day") };
+    const lang = (hass.language || "en").replace("_", "-");
+    const events = this._calEvents ? [...this._calEvents.values()].flat() : null;
+    const lines = events ? calendarLines(events, this.now(), countOf(settings), words, lang, hass.config?.time_zone, hourCycle(hass), settings) : null;
+    const open = this._calFolded === null ? settings?.open !== false : !this._calFolded;
+    return { lines, today: lines?.filter((l) => l.today).length ?? 0, open };
+  }
+
+  /** Fork: folds or opens the calendar section on this device. */
+  private foldCalendar(folded: boolean): void {
+    this._calFolded = folded;
+    try {
+      localStorage.setItem(CAL_FOLD_KEY, folded ? "1" : "0");
+    } catch {
+      /* private mode: kept until the page reloads */
+    }
+  }
+
+  /**
+   * Fork: fetches the events of the calendars chosen in the settings – now, every ten minutes while the page is shown
+   * and when a calendar's state changes (an event begins or ends). Nothing in the time travel.
+   */
+  private watchCalendar(hass: HomeAssistant, b: Building): void {
+    const ids = this.replay ? [] : calendarEntities(b.settings.x_calendar);
+    const days = daysOf(b.settings.x_calendar);
+    const key = `${ids.join(",")}|${days}`;
+    if (!ids.length) {
+      if (this.calKey || this._calEvents) {
+        clearInterval(this.calTimer);
+        this.calTimer = undefined;
+        this.calFetch = undefined;
+        this.calKey = "";
+        this._calEvents = null;
+        this.calChanged.clear();
+      }
+      return;
+    }
+    // an event that begins or ends changes the calendar's state: fetch again right away
+    let changed = false;
+    for (const id of ids) {
+      const at = hass.states[id]?.last_changed ?? "";
+      if (this.calChanged.has(id) && this.calChanged.get(id) !== at) changed = true;
+      this.calChanged.set(id, at);
+    }
+    if (key === this.calKey && this.calTimer) {
+      if (changed) this.calFetch?.();
+      return;
+    }
+    this.calKey = key;
+    this._calEvents = null;
+    this.calFetch = () =>
+      void fetchEvents(this.hass ?? hass, ids, days).then((events) => {
+        if (this.calKey === key) this._calEvents = events;
+      });
+    clearInterval(this.calTimer);
+    this.calTimer = setInterval(() => !document.hidden && this.calFetch?.(), 600_000);
+    this.calFetch();
   }
 
   /** Date and time in a corner (D631), kept current every half minute while shown. */
@@ -6623,6 +6626,53 @@ export class Fp3dView3d extends LitElement {
         display: inline-flex;
         color: var(--fp3d-accent, #37e0ff);
       }
+      /* fork: the calendar section below the household's rows */
+      .fp3d-hh-cal-head {
+        margin-top: 4px;
+        padding-top: 7px;
+        border-top: 1px solid rgba(110, 220, 255, 0.18) !important;
+        border-radius: 0 0 9px 9px;
+      }
+      .fp3d-hh-cal-head.fp3d-hh-cal-only {
+        margin-top: 0;
+        padding-top: 3px;
+        border-top: 0 !important;
+      }
+      .fp3d-hh-cal {
+        align-items: flex-start;
+      }
+      .fp3d-hh-cal-text {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .fp3d-hh-cal-text b {
+        font-size: 11px;
+        font-weight: 600;
+        opacity: 0.75;
+      }
+      .fp3d-hh-cal-today .fp3d-hh-cal-text b {
+        opacity: 1;
+        color: var(--fp3d-accent, #37e0ff);
+      }
+      .fp3d-hh-cal-now .fp3d-hh-icon,
+      .fp3d-hh-cal-now .fp3d-hh-cal-text b {
+        color: #4ddf7a;
+      }
+      .fp3d-hh-cal-text span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .fp3d-hh-cal-text i {
+        font-size: 11px;
+        font-style: normal;
+        opacity: 0.7;
+      }
+      .fp3d-hh-cal-empty {
+        font-size: 12px;
+        opacity: 0.6;
+        padding: 3px 6px 5px 32px;
+      }
       .fp3d-alert-banner {
         position: absolute;
         left: 50%;
@@ -8601,74 +8651,6 @@ export class Fp3dView3d extends LitElement {
       .fp3d-holo-min {
         width: 150px;
       }
-      /* a calendar point's card: the waste bins' tag plate with lines (see .fp3d-holo-bin), but it can be tapped */
-      .fp3d-holo.fp3d-holo-cal {
-        pointer-events: auto;
-        cursor: pointer;
-        max-width: calc(280px * var(--fp3d-pin-k, 1));
-      }
-      /* always open: nothing to tap, the house under it stays reachable */
-      .fp3d-holo.fp3d-holo-cal-fixed {
-        pointer-events: none;
-        cursor: default;
-      }
-      .fp3d-cal-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: calc(8px * var(--fp3d-pin-k, 1));
-        font-size: calc(12px * var(--fp3d-pin-k, 1));
-        font-weight: 600;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: #8ff0ff;
-      }
-      /* the head's words keep its colour and size (the tag's span rule would make them grey) */
-      .fp3d-holo-cal .fp3d-cal-head > span {
-        font-size: inherit;
-        color: inherit;
-      }
-      .fp3d-cal-head > span:first-child {
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .fp3d-holo-cal-min .fp3d-cal-head {
-        font-size: calc(17px * var(--fp3d-pin-k, 1));
-        letter-spacing: 0;
-      }
-      .fp3d-holo-cal .fp3d-cal-badge {
-        flex: none;
-        min-width: calc(18px * var(--fp3d-pin-k, 1));
-        padding: 0 calc(6px * var(--fp3d-pin-k, 1));
-        border-radius: calc(9px * var(--fp3d-pin-k, 1));
-        background: rgba(55, 224, 255, 0.28);
-        color: #ffffff;
-        font-size: calc(12px * var(--fp3d-pin-k, 1));
-        letter-spacing: 0;
-        text-align: center;
-      }
-      .fp3d-holo-cal .fp3d-holo-line {
-        flex-wrap: wrap;
-      }
-      .fp3d-holo-cal .fp3d-holo-line span {
-        flex: 1 1 0;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      /* the place: its own row under the title */
-      .fp3d-cal-loc {
-        flex-basis: 100%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        font-style: normal;
-        font-size: calc(11.5px * var(--fp3d-pin-k, 1));
-        color: #9fb0c8;
-      }
-      .fp3d-cal-empty {
-        font-size: calc(13px * var(--fp3d-pin-k, 1));
-        color: #cfd7e6;
-      }
       .fp3d-holo-sheen {
         position: absolute;
         inset: 0;
@@ -9013,7 +8995,7 @@ function runGlow(kind: ApplianceKind): ScreenState {
 }
 
 /** Furniture nobody asks to see by voice (the floor itself, holes, helpers). */
-const UNSPOKEN = new Set(["rug", "stairwell", "grid_point", "worktop", "x_calendar"]);
+const UNSPOKEN = new Set(["rug", "stairwell", "grid_point", "worktop"]);
 
 function markerHeight(f: Furniture): number {
   if (f.type === "tv_board") return f.h + 0.9;

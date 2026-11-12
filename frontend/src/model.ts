@@ -4,7 +4,7 @@
 import type { CardConfig } from "./card-config.ts";
 import { packItem } from "./packs.ts";
 import type { LampModel } from "./viewer/viewer3d.ts";
-import type { CalendarSettings } from "./calendar.ts";
+import { dropCalendarPoints, type CalendarSettings } from "./calendar.ts";
 import type { CustomStyle, StylePlan } from "./looks.ts";
 
 export type Vec2 = [number, number];
@@ -187,12 +187,6 @@ export interface Gang {
 export interface Furniture {
   /** Fixed against moving by accident. */
   locked?: boolean | null;
-  /** Calendar point (type "x_calendar"): the calendar whose next events its card lists. */
-  x_cal_entity?: EntityRef;
-  /** Calendar point: events on its card (null = the house's setting). */
-  x_cal_count?: number | null;
-  /** Calendar point: its card always shows its events and cannot be folded (a calendar to see all the time). */
-  x_cal_fixed?: boolean | null;
   /** Shown in 3D only while an entity is in a state (decoration for a season, show-if.ts); the editor always shows it. */
   show_if?: { entity: string; state?: string | null } | null;
   /** Furniture block: items with the same group id are selected, moved and turned together (a kitchen, a wall unit). */
@@ -782,7 +776,7 @@ export interface BuildingSettings extends StylePlan {
   weather_entity?: string | null;
   /** Which weather effects the 3D view shows (null = all but fog). */
   weather_effects?: WeatherEffect[] | null;
-  /** Calendar points: events per card, days ahead, cards open or as a symbol (calendar.ts). */
+  /** Calendar events in the household card (fork): the calendars, how many events, days ahead, date style (calendar.ts). */
   x_calendar?: CalendarSettings | null;
   /** Warning for a window open while it rains (default on). */
   rain_warning?: boolean;
@@ -1482,8 +1476,6 @@ export const FURNITURE_TYPES = [
   "lamp_fan",
   "wifi_ap",
   "water_heater",
-  // an invisible point with a calendar's glass card (calendar.ts)
-  "x_calendar",
 ] as const;
 
 /** Furniture library sections (the editor lists them in this order). */
@@ -1798,8 +1790,6 @@ export const FURNITURE_SIZE: Record<FurnitureType, [number, number, number]> = {
   fridge: [0.6, 0.65, 1.8],
   fridge_smart: [0.91, 0.73, 1.78],
   stairwell: [1.0, 2.6, 0.02],
-  // the point's height is where its card hangs
-  x_calendar: [0.4, 0.4, 1.6],
   stove: [0.6, 0.62, 0.92],
   sink: [0.9, 0.62, 0.92],
   bathtub: [1.7, 0.75, 0.58],
@@ -1968,6 +1958,8 @@ export function normalizeBuilding(b: Building): Building {
   b.energy = { ...DEFAULT_ENERGY, ...(b.energy ?? {}) };
   b.presence = b.presence ?? [];
   b.settings = { ...DEFAULT_SETTINGS, ...b.settings, roof: { ...DEFAULT_ROOF, ...(b.settings?.roof ?? {}) } };
+  // fork: the calendar points of 3.1.1.1 and before become calendars of the household card
+  dropCalendarPoints(b);
   for (const f of b.floors) {
     f.outdoor = f.outdoor ?? [];
     f.walls = f.walls ?? [];

@@ -11,7 +11,7 @@ import { copyFloor, download, exportFile, parseExport } from "../transfer.ts";
 import { carEntities, type CarEntities, areaEntities, autoPlace, hiddenInHa, CLIMATE_CLASSES, defaultHeight, entityName, entityAreaId, furnitureEntities, groupByDevice, hasScreen, isMediaFurniture, isPlaceable, isRoomClimateSensor, kindOf, openingEntities, otherAreaEntities, pictureRuleMatches, roomClimateSensors, roomPanelEntities, unassignedEntities, windowPosition, type ClimateKey } from "../devices.ts";
 import { furnitureSymbol } from "./furniture2d.ts";
 import {
-  CALENDAR_TYPE,
+  calendarEntities,
   DATE_STYLES,
   DEFAULT_CALENDAR_COUNT,
   DEFAULT_CALENDAR_DAYS,
@@ -22,7 +22,6 @@ import {
   MAX_DATE_FORMAT,
   eventsOf,
   formatWhen,
-  isCalendarPoint,
   type CalendarSettings,
   type DateStyle,
 } from "../calendar.ts";
@@ -371,7 +370,7 @@ function pathLengthOf(p: PoolPipe, nodeAt: (n: string) => { x: number; z: number
 const ARROWS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
 // furniture without a top to light: no "State from" box
-const NO_STATE_TYPES = new Set(["parking", "stairwell", "rug", "grid_point", "waste_bin", "mailbox", "wall_switch", "wall_socket", "wifi_ap", "water_heater", CALENDAR_TYPE]);
+const NO_STATE_TYPES = new Set(["parking", "stairwell", "rug", "grid_point", "waste_bin", "mailbox", "wall_switch", "wall_socket", "wifi_ap", "water_heater"]);
 
 /** A gas or water meter from a pack (its reading in m³ or litres, no power): family "meter" tagged gas or water. */
 function volumeMeter(type: string): boolean {
@@ -2968,31 +2967,6 @@ export class Fp3dEditor extends LitElement {
         : nothing}
       <p class="fp3d-sub">${this.t("free_wall_hint")}</p>
     </section>`;
-  }
-
-  /** A calendar point's calendar and how many events its card lists (empty: the house's setting). */
-  private renderCalendarPointForm(f: Furniture) {
-    const own = f.x_cal_count;
-    return html`<div class="fp3d-form fp3d-links">
-      ${this.hass
-        ? this.entitySelect(this.t("cal_entity"), f.x_cal_entity ?? null, undefined, this.entityOptions((id) => id.startsWith("calendar.")), (v) => this.updateFurniture({ x_cal_entity: v && v !== "none" ? v : null }))
-        : nothing}
-      <label class="fp3d-check fp3d-wide"
-        ><input
-          type="checkbox"
-          .checked=${own != null}
-          ?disabled=${!this.isAdmin}
-          @change=${(ev: Event) => this.updateFurniture({ x_cal_count: (ev.target as HTMLInputElement).checked ? (this._doc.settings.x_calendar?.count ?? DEFAULT_CALENDAR_COUNT) : null })}
-        />
-        ${this.t("cal_own_count")}</label
-      >
-      ${own != null ? this.num(this.t("cal_count"), own, (v) => this.updateFurniture({ x_cal_count: Math.min(MAX_CALENDAR_COUNT, Math.max(1, Math.round(v))) }), 1, 1) : nothing}
-      <label class="fp3d-check fp3d-wide" title=${this.t("cal_fixed_hint")}
-        ><input type="checkbox" .checked=${!!f.x_cal_fixed} ?disabled=${!this.isAdmin} @change=${(ev: Event) => this.updateFurniture({ x_cal_fixed: (ev.target as HTMLInputElement).checked || null })} />
-        ${this.t("cal_fixed")}</label
-      >
-      <p class="fp3d-sub fp3d-wide">${this.t("cal_point_hint")}</p>
-    </div>`;
   }
 
   /** A floor opening (stairwell, gallery): a hole in this floor's floor, drawn as a rectangle. */
@@ -11798,7 +11772,7 @@ export class Fp3dEditor extends LitElement {
               ${f.mount_y != null ? html`<button class="fp3d-btn fp3d-field-btn" ?disabled=${!admin} @click=${() => this.updateFurniture({ mount_y: null })}>${this.t("height_auto")}</button>` : nothing}`
           : nothing}
       </div>
-      ${isCalendarPoint(f) ? this.renderCalendarPointForm(f) : nothing}
+
       ${f.type === "stairs" ? html`<p class="fp3d-sub">${this.t("stairs_hint")}</p>` : nothing}
       ${f.type === "stairs_u" ? html`<p class="fp3d-sub">${this.t("stairs_u_hint")}</p>` : nothing}
       ${f.type === "stairwell"
@@ -14318,17 +14292,36 @@ export class Fp3dEditor extends LitElement {
 
   /** ⚙ Weather & warnings: the weather entity and its effects, the rain warning, warning names, outage, sun patches. */
   /**
-   * ⚙ Calendar: how many events the calendar points' cards list, how far ahead, whether they start open, and the
-   * points of the plan (an invisible item each, see calendar.ts) with a button that sets a new one.
+   * ⚙ Calendar (fork): the calendars whose next events the glass card "Today in the household" lists in its own
+   * section, how many, how far ahead, how the date is written and whether the section starts open.
    */
   private renderCalendarSettings() {
     const s: CalendarSettings = this._doc.settings.x_calendar ?? {};
     const set = (patch: Partial<CalendarSettings>) => this.setSettings({ x_calendar: { ...s, ...patch } });
-    const points = this._doc.floors.flatMap((fl) => fl.furniture.filter(isCalendarPoint).map((m) => ({ m, fl })));
-    const name = (m: Furniture) => m.name || (m.x_cal_entity && this.hass?.states[m.x_cal_entity]?.attributes.friendly_name) || m.x_cal_entity || this.t("cal_no_entity");
+    const chosen = calendarEntities(s);
+    const name = (id: string) => String(this.hass?.states[id]?.attributes.friendly_name ?? id);
     return html`<details class="fp3d-section" open>
       <summary>${this.t("settings_calendar")}</summary>
       <div class="fp3d-form">
+        <p class="fp3d-sub fp3d-wide">${this.t("cal_hint")}</p>
+        <div class="fp3d-sub fp3d-wide">${this.t("cal_calendars")}</div>
+        ${chosen.length
+          ? chosen.map(
+              (id) => html`<div class="fp3d-row fp3d-wide">
+                <span>📅 ${name(id)}</span>
+                <button class="fp3d-btn" title=${this.t("cal_remove")} aria-label=${this.t("cal_remove")} ?disabled=${!this.isAdmin} @click=${() => set({ entities: chosen.filter((x) => x !== id) })}>✕</button>
+              </div>`,
+            )
+          : html`<p class="fp3d-sub fp3d-wide">${this.t("cal_no_calendars")}</p>`}
+        ${this.hass
+          ? this.entitySelect(
+              this.t("cal_add_calendar"),
+              null,
+              undefined,
+              this.entityOptions((id) => id.startsWith("calendar.") && !chosen.includes(id)),
+              (v) => v && v !== "none" && set({ entities: [...chosen, v] }),
+            )
+          : nothing}
         ${this.num(this.t("cal_count"), s.count ?? DEFAULT_CALENDAR_COUNT, (v) => set({ count: Math.min(MAX_CALENDAR_COUNT, Math.max(1, Math.round(v))) }), 1, 1)}
         ${this.num(this.t("cal_days"), s.days ?? DEFAULT_CALENDAR_DAYS, (v) => set({ days: Math.min(MAX_CALENDAR_DAYS, Math.max(1, Math.round(v))) }), 1, 1)}
         <label class="fp3d-field fp3d-wide"
@@ -14346,24 +14339,6 @@ export class Fp3dEditor extends LitElement {
           ><input type="checkbox" .checked=${s.open !== false} @change=${(ev: Event) => set({ open: (ev.target as HTMLInputElement).checked })} />
           ${this.t("cal_open")}</label
         >
-        <p class="fp3d-sub fp3d-wide">${this.t("cal_hint")}</p>
-        <div class="fp3d-sub fp3d-wide">${this.t("cal_points")}</div>
-        ${points.length
-          ? points.map(
-              ({ m, fl }) => html`<button
-                class="fp3d-btn fp3d-wide"
-                @click=${() => {
-                  this._settingsDialog = null;
-                  this._floorId = fl.id;
-                  this.selectItem("furniture", m.id);
-                  this.showPoint(m.x, m.z);
-                }}
-              >
-                📅 ${name(m)} · ${fl.name}${m.x_cal_fixed ? " · 📌" : ""}
-              </button>`,
-            )
-          : html`<p class="fp3d-sub fp3d-wide">${this.t("cal_no_points")}</p>`}
-        <button class="fp3d-btn fp3d-wide" ?disabled=${!this.floor} @click=${() => this.addCalendarPoint()}>＋ ${this.t("cal_add")}</button>
       </div>
     </details>`;
   }
@@ -14406,17 +14381,6 @@ export class Fp3dEditor extends LitElement {
       </p>`;
   }
 
-  /** A new calendar point in the middle of the plan on the current floor, selected so its calendar can be set and it can be dragged. */
-  private addCalendarPoint(): void {
-    if (!this.floor || !this.isAdmin) return;
-    const [w, d, h] = furnitureSize(CALENDAR_TYPE);
-    const [x, z] = this.toWorld(this._size.w / 2, this._size.h / 2);
-    const point: Furniture = { id: uid("furniture"), type: CALENDAR_TYPE, x: round(x), z: round(z), rotation: 0, w, d, h, variant: null };
-    this.change((_, f) => f.furniture.push(point));
-    this._settingsDialog = null;
-    this.selectItem("furniture", point.id);
-    this.showPoint(point.x, point.z);
-  }
 
   private renderWeatherSettings() {
     const s = this._doc.settings;

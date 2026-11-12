@@ -1,15 +1,19 @@
 /**
- * Calendar points: an invisible point in the plan (furniture of type "x_calendar") on which a glass card lists the
- * next events of a Home Assistant calendar. The events come from Home Assistant's REST API
+ * Calendar events (fork): the next events of the Home Assistant calendars chosen in ⚙ Settings → Calendar, listed
+ * in their own section of the glass card "Today in the household". The events come from Home Assistant's REST API
  * (`GET /api/calendars/<id>?start&end`); a calendar entity's state only knows the current or next event.
  * Pure logic apart from fetchEvents: see calendar.test.ts.
+ *
+ * Until 3.1.1.1 each calendar had an invisible point in the plan (furniture of type "x_calendar"); normalizeBuilding
+ * and the backend take their calendars over into the settings and drop the points (dropCalendarPoints).
  */
 
-import type { Floor, Furniture } from "./model.ts";
+import type { Building } from "./model.ts";
 import type { HomeAssistant } from "./types.ts";
 
-export const CALENDAR_TYPE = "x_calendar";
-/** Events listed when neither the point nor the settings say how many. */
+/** The furniture type of the former calendar points (only to clean them up). */
+export const LEGACY_CALENDAR_TYPE = "x_calendar";
+/** Events listed when the settings do not say how many. */
 export const DEFAULT_CALENDAR_COUNT = 5;
 /** Days ahead that are asked for when the settings do not say. */
 export const DEFAULT_CALENDAR_DAYS = 14;
@@ -18,11 +22,13 @@ export const MAX_CALENDAR_DAYS = 90;
 
 /** The house's calendar settings (building.settings.x_calendar). */
 export interface CalendarSettings {
-  /** Events per card (a point may say its own). */
+  /** The calendars whose events the household card lists. */
+  entities?: string[] | null;
+  /** Events in the card's calendar section (of all calendars together). */
   count?: number | null;
   /** How many days ahead are looked at. */
   days?: number | null;
-  /** The cards start open (else as a small 📅 symbol that opens on a tap). */
+  /** The card's calendar section starts open (else folded to its title; a tap on it opens and folds it). */
   open?: boolean | null;
   /** How the day is written (null = relative). */
   date_style?: DateStyle | null;
@@ -57,6 +63,8 @@ export interface CalApiEvent {
 export interface CalEvent {
   title: string;
   location: string | null;
+  /** The calendar it comes from (a tap on its line opens it). */
+  calendar?: string | null;
   /** All-day: the first and the day after the last day ("YYYY-MM-DD", as the calendar says it). */
   allDay: boolean;
   startDay: string | null;
@@ -76,29 +84,50 @@ export interface CalLine {
   today: boolean;
   /** Where it is, when the settings show places and the event has one. */
   location: string | null;
+  /** The calendar it comes from. */
+  calendar: string | null;
 }
 
-export function isCalendarPoint(f: Pick<Furniture, "type">): boolean {
-  return f.type === CALENDAR_TYPE;
+const isCalendar = (id: unknown): id is string => typeof id === "string" && id.startsWith("calendar.");
+
+/** The chosen calendars (each once, only calendar entities). */
+export function calendarEntities(settings: CalendarSettings | null | undefined): string[] {
+  return [...new Set((settings?.entities ?? []).filter(isCalendar))];
 }
 
-/** The calendar points of all floors that have a calendar set. */
-export function calendarPoints(floors: readonly Floor[]): { floor: Floor; item: Furniture; entity: string }[] {
-  const out: { floor: Floor; item: Furniture; entity: string }[] = [];
-  for (const floor of floors) {
-    for (const item of floor.furniture) {
-      const entity = item.x_cal_entity;
-      if (isCalendarPoint(item) && typeof entity === "string" && entity.startsWith("calendar.")) out.push({ floor, item, entity });
+/**
+ * Cleans up the calendar points of 3.1.1.1 and before: their calendars join the settings' list (in plan order, each
+ * once), the points leave the plan. Whether anything changed.
+ */
+export function dropCalendarPoints(b: Building): boolean {
+  let changed = false;
+  const found: string[] = [];
+  for (const floor of b.floors ?? []) {
+    const items = floor.furniture ?? [];
+    const keep = items.filter((m) => {
+      if (m.type !== LEGACY_CALENDAR_TYPE) return true;
+      const entity = (m as { x_cal_entity?: unknown }).x_cal_entity;
+      if (isCalendar(entity)) found.push(entity);
+      return false;
+    });
+    if (keep.length !== items.length) {
+      floor.furniture = keep;
+      changed = true;
     }
   }
-  return out;
+  if (found.length && b.settings) {
+    const before = calendarEntities(b.settings.x_calendar);
+    const entities = [...new Set([...before, ...found])];
+    if (entities.length !== before.length) b.settings.x_calendar = { ...(b.settings.x_calendar ?? {}), entities };
+  }
+  return changed;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)));
 
-/** How many events a point lists: its own number, else the house's, else 5. */
-export function countOf(item: Pick<Furniture, "x_cal_count">, settings: CalendarSettings | null | undefined): number {
-  const n = item.x_cal_count ?? settings?.count ?? DEFAULT_CALENDAR_COUNT;
+/** How many events the card lists: the house's number, else 5. */
+export function countOf(settings: CalendarSettings | null | undefined): number {
+  const n = settings?.count ?? DEFAULT_CALENDAR_COUNT;
   return clamp(Number.isFinite(n) ? n : DEFAULT_CALENDAR_COUNT, 1, MAX_CALENDAR_COUNT);
 }
 
@@ -284,7 +313,7 @@ export function formatWhen(
   return `${dayWord} ${time}`;
 }
 
-/** A card's lines for a calendar's events, written as the house's settings say. */
+/** The card's lines for the calendars' events (all of them together), written as the house's settings say. */
 export function calendarLines(
   events: readonly CalEvent[],
   now: number,
@@ -305,6 +334,7 @@ export function calendarLines(
       now: isNow,
       today: isNow || (e.allDay ? e.startDay === today : dayKey(e.start, tz) === today),
       location: settings?.location && e.location?.trim() ? e.location.trim() : null,
+      calendar: e.calendar ?? null,
     };
   });
 }
@@ -322,7 +352,10 @@ export async function fetchEvents(hass: HomeAssistant, calendars: readonly strin
     calendars.map(async (id) => {
       try {
         const raw = await api.call(hass, "GET", `calendars/${id}?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`);
-        out.set(id, eventsOf(Array.isArray(raw) ? (raw as CalApiEvent[]) : []));
+        out.set(
+          id,
+          eventsOf(Array.isArray(raw) ? (raw as CalApiEvent[]) : []).map((e) => ({ ...e, calendar: id })),
+        );
       } catch {
         /* a calendar that cannot be read shows nothing */
       }
