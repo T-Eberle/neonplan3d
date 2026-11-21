@@ -12,13 +12,16 @@
 
 import { Color, type BufferGeometry } from "three";
 import type { Floor, Furniture, Opening, Room, SolarField, Vec2 } from "../model.ts";
-import { furnitureFootprint, GANG_TYPES, isLamp, pointInPolygon, polygonArea, STAIR_TYPES, stairsULayout } from "../model.ts";
+import { furnitureFootprint, GANG_TYPES, groundLevel, isLamp, pointInPolygon, polygonArea, STAIR_TYPES, stairsULayout } from "../model.ts";
 import { freeWallRoomLeft, generateWalls, locateOpening, openingHost, placeWallPlate, slopeTop, wallContinuation, type Wall } from "../geometry/walls.ts";
 import { clipConvex, isConvex } from "../geometry/area.ts";
 import { holeInRoom, insetHole, mergeHoles } from "../geometry/holes.ts";
 import { pushFurniture } from "./furniture.ts";
-import { mountBase, packItem } from "../packs.ts";
+import { mountBase, packItem, type PackItem } from "../packs.ts";
+import { fitParts } from "../pack-scale.ts";
 import { pushOutdoor } from "./outdoor.ts";
+import { pushSurroundings } from "./surroundings.ts";
+import type { PlacedSurroundings } from "../surroundings.ts";
 import { pushModules } from "./roof.ts";
 import type { RoofFace } from "../solar.ts";
 import { cutAbove, cutLinesAbove, FURN_OFFSET, ALWAYS, CAP_OFFSET, CUT_OFFSET, EDGE_BASE, EDGE_CUT, EDGE_SOFT, EDGE_TOP, GeoBuffer, LineBuffer, LOWER_OFFSET, pushPrism, triangulate } from "./geo.ts";
@@ -101,7 +104,50 @@ export const SLAB = 0.2;
 const BURIED = -0.06;
 /** How far the slab under a doorway stays below the floor. */
 const DOORWAY_DROP = 0.01;
-const BUCKETS = 8;
+/** Fold buckets a floor can have (fold = 16 · kind + bucket, one bit each in the shader's masks). */
+const MAX_BUCKETS = 16;
+/** Outer walls facing within this angle of each other share a bucket (radians, 1°). */
+const SAME_FACING = Math.PI / 180;
+
+const turnBetween = (a: number, b: number) => Math.abs(((((a - b) % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
+
+/**
+ * Outer walls grouped by the direction they face (#1189): walls within 1° share a group, whose direction is the
+ * length-weighted mean of theirs. More directions than `max` (a round tower): the two closest groups are merged
+ * until they fit. Returns each group's outward unit normal and each wall's group.
+ */
+export function facingGroups(walls: { out: Vec2; len: number }[], max: number): { normals: Vec2[]; of: number[] } {
+  const groups: { x: number; z: number; ang: number; ids: number[] }[] = [];
+  const add = (g: (typeof groups)[number], x: number, z: number) => {
+    g.x += x;
+    g.z += z;
+    g.ang = Math.atan2(g.z, g.x);
+  };
+  walls.forEach((w, i) => {
+    const ang = Math.atan2(w.out[1], w.out[0]);
+    const x = w.out[0] * Math.max(w.len, 1e-3);
+    const z = w.out[1] * Math.max(w.len, 1e-3);
+    const g = groups.find((g) => turnBetween(g.ang, ang) < SAME_FACING);
+    if (g) {
+      add(g, x, z);
+      g.ids.push(i);
+    } else groups.push({ x, z, ang, ids: [i] });
+  });
+  while (groups.length > max) {
+    let [bi, bj, gap] = [0, 1, Infinity];
+    for (let i = 0; i < groups.length; i++)
+      for (let j = i + 1; j < groups.length; j++) {
+        const d = turnBetween(groups[i].ang, groups[j].ang);
+        if (d < gap) [bi, bj, gap] = [i, j, d];
+      }
+    const [gone] = groups.splice(bj, 1);
+    add(groups[bi], gone.x, gone.z);
+    groups[bi].ids.push(...gone.ids);
+  }
+  const of: number[] = [];
+  groups.forEach((g, gi) => g.ids.forEach((i) => (of[i] = gi)));
+  return { normals: groups.map((g) => [g.x / (Math.hypot(g.x, g.z) || 1), g.z / (Math.hypot(g.x, g.z) || 1)] as Vec2), of };
+}
 const SHADOW_WIDTH = 0.42;
 const SHADOW_DARK = 0.42;
 
@@ -134,7 +180,7 @@ export function wallColors(floor: Floor): ((a: Vec2, b: Vec2, nx: number, nz: nu
   if (!naturalPalette()) return undefined;
   const facade = facadeColor();
   const rooms = floor.rooms.filter((r) => r.points.length >= 3);
-  if (facade === null && !rooms.some((r) => r.wall_color || r.wall_colors?.some(Boolean))) return undefined;
+  if (facade === null && !rooms.some((r) => r.wall_color || r.wall_colors?.some(Boolean)) && !floor.walls?.some((w) => w.color)) return undefined;
   return (a, b, nx, nz) => {
     // a probe 5 cm in front of the side tells which room it faces
     const p: Vec2 = [(a[0] + b[0]) / 2 + nx * 0.05, (a[1] + b[1]) / 2 + nz * 0.05];
@@ -165,13 +211,33 @@ export function buildFloorGeometry(
    * there: knee walls at the eaves, gables up to the ridge, inner walls cut by the slope.
    */
   roofUnder?: (x: number, z: number) => number | null,
+  /** The neighbourhood from the map, in plan coordinates (only the ground floor carries it). */
+  surroundings: PlacedSurroundings | null = null,
+  /**
+   * Under a dormer: how high a wall whose own top is `top` rises there, relative to this floor (null = not above its
+   * top). The roof above still cuts it (#1156).
+   */
+  roofRise?: (x: number, z: number, top: number) => number | null,
 ): FloorGeometry {
   const { walls, open: openRooms } = generateWalls(floor.rooms, { exterior: wallExterior, interior: wallInterior }, floor.walls ?? []);
-  // the top of a wall at a point: its own height (a sloping wall's at that point), or the roof above when lower
+  // the top of a wall at a point: its own height (a sloping wall's at that point; under a dormer up to where the
+  // dormer's front starts, #1156), or the roof above when lower
   const topAt = (x: number, z: number, H: number, wall?: Wall): number => {
-    const own = wall?.slope ? Math.min(H, slopeTop(wall.slope, x, z)) : H;
+    let own = wall?.slope ? Math.min(H, slopeTop(wall.slope, x, z)) : H;
+    const up = roofRise && roofUnder && !wall?.slope ? roofRise(x, z, H) : null;
+    if (up !== null && up > own) own = up;
     const r = roofUnder ? roofUnder(x, z) : null;
     return r === null ? own : Math.max(0.05, Math.min(own, r));
+  };
+  // the highest a wall rises anywhere under a dormer (#1156): its pieces reach up to there, the roof cuts them
+  const reachOf = (wall: Wall, H: number): number => {
+    if (!roofRise || !roofUnder || wall.slope) return H;
+    const len = Math.hypot(wall.b[0] - wall.a[0], wall.b[1] - wall.a[1]);
+    const n = Math.max(2, Math.ceil(len / 0.1) + 1);
+    const probes: Vec2[] = [...wall.footprint, ...Array.from({ length: n }, (_, i): Vec2 => [wall.a[0] + ((wall.b[0] - wall.a[0]) * i) / (n - 1), wall.a[1] + ((wall.b[1] - wall.a[1]) * i) / (n - 1)])];
+    let top = H;
+    for (const [x, z] of probes) top = Math.max(top, roofRise(x, z, H) ?? H);
+    return top;
   };
   // a wall under a roof that lies below this floor's own level there (the corner of a room beside a hip, #638):
   // even the shortest stub would stand out above the roof's top face, so nothing is built there
@@ -207,7 +273,8 @@ export function buildFloorGeometry(
   // the lowest wall top along a stretch of a wall (sampled), for openings and the top edge line
   const lowestTop = (a: Vec2, ax: Vec2, s0: number, s1: number, H: number, wall?: Wall): number => {
     if (!roofUnder && !wall?.slope) return H;
-    let lo = H;
+    // the samples decide: under a dormer they may lie above the wall's own height (#1156)
+    let lo = Infinity;
     const n = Math.max(2, Math.ceil((s1 - s0) / 0.25) + 1);
     for (let i = 0; i < n; i++) {
       const s = s0 + ((s1 - s0) * i) / (n - 1);
@@ -285,21 +352,22 @@ export function buildFloorGeometry(
     const left = freeWallRoomLeft(wall, floor.rooms);
     if (left !== null) freeOuter.set(wall, left);
   }
-  for (const wall of walls) {
-    let key = "interior";
-    let normal: Vec2 | null = null;
+  // outer walls are grouped by the direction they really face, so each turns to glass at its own angle (#1189)
+  const outer = walls.flatMap((wall) => {
     const freeLeft = freeOuter.get(wall);
-    if (wall.exterior || freeLeft !== undefined) {
-      const dx = wall.b[0] - wall.a[0];
-      const dz = wall.b[1] - wall.a[1];
-      const l = Math.hypot(dx, dz) || 1;
-      const k = freeLeft === false ? -1 : 1;
-      const out: Vec2 = [(k * dz) / l, (-k * dx) / l]; // right normal: away from the room
-      const sector = ((Math.round((Math.atan2(out[1], out[0]) / (2 * Math.PI)) * BUCKETS) % BUCKETS) + BUCKETS) % BUCKETS;
-      key = `s${sector}`;
-      const ang = (sector / BUCKETS) * 2 * Math.PI;
-      normal = [Math.cos(ang), Math.sin(ang)];
-    }
+    if (!wall.exterior && freeLeft === undefined) return [];
+    const dx = wall.b[0] - wall.a[0];
+    const dz = wall.b[1] - wall.a[1];
+    const l = Math.hypot(dx, dz) || 1;
+    const k = freeLeft === false ? -1 : 1;
+    return [{ wall, out: [(k * dz) / l, (-k * dx) / l] as Vec2, len: l }]; // right normal: away from the room
+  });
+  const faces = facingGroups(outer, MAX_BUCKETS - 1);
+  const groupOf = new Map(outer.map((o, i) => [o.wall, faces.of[i]]));
+  for (const wall of walls) {
+    const g = groupOf.get(wall);
+    const key = g === undefined ? "interior" : `g${g}`;
+    const normal: Vec2 | null = g === undefined ? null : faces.normals[g];
     let b = bucketIndex.get(key);
     if (b === undefined) {
       b = buckets.length;
@@ -375,12 +443,17 @@ export function buildFloorGeometry(
   // ---------------------------------------------------------------- wall solids
   const cut = Math.min(floor.cut_height, floor.height);
   const wallBuf = new GeoBuffer();
-  const sideColor = wallColors(floor);
+  const floorSide = wallColors(floor);
   for (const wall of walls) {
     const b = wallBucket.get(wall)!;
     const ax = unit([wall.b[0] - wall.a[0], wall.b[1] - wall.a[1]]);
     const list = (spans.get(wall) ?? []).sort((p, q) => p.s0 - q.s0);
+    // a wall drawn on its own may have a colour of its own, on both sides (#1101)
+    const own = wall.free && floorSide ? hexColor(floor.walls?.find((w) => w.id === wall.free)?.color) : null;
+    const sideColor = own !== null ? () => own : floorSide;
     const H = wallHeight(wall, floor.height);
+    // under a dormer it may rise above its own height (#1156)
+    const reach = reachOf(wall, H);
     // pieces along the axis, cut at every opening edge: each piece leaves out all the openings above it
     // (two windows one above the other, a window over a door), the wall fills what remains
     const pieces: { t0: number; t1: number; ranges: [number, number][] }[] = [];
@@ -399,13 +472,13 @@ export function buildFloorGeometry(
         if (a > y + 1e-4) ranges.push([y, a < 1e-4 ? -DOORWAY_DROP : a]);
         y = Math.max(y, b);
       }
-      if (H > y + 1e-4) ranges.push([y, H]);
+      if (reach > y + 1e-4) ranges.push([y, reach]);
       pieces.push({ t0, t1, ranges });
     }
     // under a roof the pieces are cut into short steps, so each step's top lies in one roof plane
     const len = Math.hypot(wall.b[0] - wall.a[0], wall.b[1] - wall.a[1]);
     // under a roof or with a sloping top of its own (D569)
-    const underRoof = (roofUnder || wall.slope) && lowestTop(wall.a, ax, 0, len, H, wall) < H - 1e-3;
+    const underRoof = (roofUnder || wall.slope) && (lowestTop(wall.a, ax, 0, len, H, wall) < H - 1e-3 || reach > H + 1e-3);
     const steps = underRoof
       ? pieces.flatMap((piece) => {
           const t0 = Math.max(piece.t0, -0.5);
@@ -454,13 +527,50 @@ export function buildFloorGeometry(
         { ...piece, t0: t, inner0: true },
       ];
     };
-    for (const piece of underRoof ? steps.flatMap(fine).flatMap(crossing) : steps) {
+    // a step across a jump of the roof (the edge of a dormer's opening) is split where it jumps: built whole, its top
+    // slanted across the step from the low roof to the high one (#1145); the lower side's face at the step lies inside
+    // the taller one's and is left out
+    const jumps = (piece: (typeof steps)[number]): (typeof steps)[number][] => {
+      const topOn = (t: number) => topAt(wall.a[0] + ax[0] * t, wall.a[1] + ax[1] * t, H, wall);
+      const j = roofUnder ? topJump(topOn, Math.max(piece.t0, 0), Math.min(piece.t1, len)) : null;
+      if (!j) return [piece];
+      const lowFirst = topOn(j[0]) < topOn(j[1]);
+      return [
+        { ...piece, t1: j[0], inner1: lowFirst },
+        { ...piece, t0: j[1], inner0: !lowFirst },
+      ];
+    };
+    const kept = (underRoof ? steps.flatMap(fine).flatMap(jumps).flatMap(crossing) : steps).flatMap((piece) => {
       const poly = underRoof ? unburied(clipAlong(wall.footprint, wall.a, ax, piece.t0, piece.t1)) : clipAlong(wall.footprint, wall.a, ax, piece.t0, piece.t1);
-      if (poly.length < 3) continue;
+      // an opening starting right at the wall's end leaves a piece of no area there: drawn, it stood as a thin
+      // plate in the passage (#1158) – and it is no neighbour that would hide the lintel's end face
+      return poly.length < 3 || Math.abs(polygonArea(poly)) < 1e-6 ? [] : [{ piece, poly }];
+    });
+    // the heights where a piece has no wall (ranges run upwards): only there is its neighbour's end face seen
+    const gaps = (ranges: [number, number][]): [number, number][] => {
+      const out: [number, number][] = [];
+      let y = -Infinity;
+      for (const [a, c] of ranges) {
+        if (a > y + 1e-6) out.push([y, a]);
+        y = Math.max(y, c);
+      }
+      out.push([y, Infinity]);
+      return out;
+    };
+    for (let i = 0; i < kept.length; i++) {
+      const { piece, poly } = kept[i];
       // the faces between two steps of one piece are inside the wall: left out, or they show as stripes
       // through the see-through walls (D180)
       const on = (p: Vec2, t: number) => Math.abs(tOf(p) - t) < 1e-4;
       const skipSide = (p: Vec2, q: Vec2) => (piece.inner0 && on(p, piece.t0) && on(q, piece.t0)) || (piece.inner1 && on(p, piece.t1) && on(q, piece.t1));
+      // at an opening's edge the pieces on both sides stand against each other (steps of one piece share its ranges):
+      // the end faces are drawn only where the other piece has no wall – the reveal between sill and lintel; drawn
+      // whole, they stood as strips from the floor to the top inside the see-through walls (#1182)
+      const prev = i > 0 ? kept[i - 1].piece : null;
+      const next = i + 1 < kept.length ? kept[i + 1].piece : null;
+      const open0 = prev && prev.ranges !== piece.ranges && Math.abs(prev.t1 - piece.t0) < 1e-6 ? gaps(prev.ranges) : null;
+      const open1 = next && next.ranges !== piece.ranges && Math.abs(next.t0 - piece.t1) < 1e-6 ? gaps(next.ranges) : null;
+      const sideBands = open0 || open1 ? (p: Vec2, q: Vec2) => (open0 && on(p, piece.t0) && on(q, piece.t0) ? open0 : open1 && on(p, piece.t1) && on(q, piece.t1) ? open1 : null) : undefined;
       // the roof over this step: the lowest point of its footprint decides what is left of each range
       const roofTop = underRoof ? Math.min(...poly.map(([x, z]) => topAt(x, z, H, wall))) : H;
       for (const [y0, y1raw] of piece.ranges) {
@@ -473,9 +583,9 @@ export function buildFloorGeometry(
           // the top face at the cut height is only seen while the wall is cut
           const topFold = y1 > cut + 1e-6 ? CAP_OFFSET + b : LOWER_OFFSET + b;
           const capped = sloped && roofTop < cut ? (x: number, z: number) => Math.min(cut, topOf(x, z)) : Math.min(y1, cut);
-          pushPrism(wallBuf, poly, y0, capped, NEON.wall, NEON.wallTop, { sideColor, aoFrom: 0, bottom: lintel, fold: LOWER_OFFSET + b, topFold, skipSide });
+          pushPrism(wallBuf, poly, y0, capped, NEON.wall, NEON.wallTop, { sideColor, aoFrom: 0, bottom: lintel, fold: LOWER_OFFSET + b, topFold, skipSide, sideBands });
         }
-        if (y1 > cut + 1e-6 && roofTop > cut - 1e-6) pushPrism(wallBuf, poly, Math.max(y0, cut), sloped ? topOf : y1, NEON.wall, NEON.wallTop, { sideColor, aoFrom: 0, fold: b, bottom: lintel && y0 >= cut, skipSide });
+        if (y1 > cut + 1e-6 && roofTop > cut - 1e-6) pushPrism(wallBuf, poly, Math.max(y0, cut), sloped ? topOf : y1, NEON.wall, NEON.wallTop, { sideColor, aoFrom: 0, fold: b, bottom: lintel && y0 >= cut, skipSide, sideBands });
       }
     }
   }
@@ -488,8 +598,28 @@ export function buildFloorGeometry(
   lines.c.push(...holeLines.c);
   lines.f.push(...holeLines.f);
   const spansOf = (w: Wall, keep: (sp: Span) => boolean) => (spans.get(w) ?? []).filter(keep);
+  // a wall end an opening reaches stands open below the opening's top: its end face draws no base, cut or corner
+  // lines there (#1158)
+  const openEnds = new Map<string, Span>();
+  for (const e of outline.edges) {
+    const sp = openEndSpan(e, spans.get(e.wall) ?? []);
+    if (sp) for (const p of [e.a, e.b]) openEnds.set(vkey(p), sp);
+  }
+  const openAt = (p: Vec2) => openEnds.has(vkey(p));
   for (const e of outline.edges) {
     const b = wallBucket.get(e.wall)!;
+    const open = openEndSpan(e, spans.get(e.wall) ?? []);
+    if (open) {
+      if (open.sill > 0.005) lines.seg([e.a[0], 0.004, e.a[1]], [e.b[0], 0.004, e.b[1]], EDGE_BASE);
+      if (!(open.sill < cut && open.top > cut)) lines.seg([e.a[0], cut, e.a[1]], [e.b[0], cut, e.b[1]], EDGE_CUT, CUT_OFFSET + b);
+      const H = wallHeight(e.wall, floor.height);
+      if (open.top < H - 0.021) {
+        const ya = topAt(e.a[0], e.a[1], H, e.wall);
+        const yb = topAt(e.b[0], e.b[1], H, e.wall);
+        lines.seg([e.a[0], ya, e.a[1]], [e.b[0], yb, e.b[1]], EDGE_TOP, Math.max(ya, yb) <= cut + 1e-6 ? LOWER_OFFSET + b : b);
+      }
+      continue;
+    }
     // base line along the floor: not across doorways
     for (const [p, q] of subtractSpans(e, spansOf(e.wall, (sp) => sp.sill <= 0.005))) lines.seg([p[0], 0.004, p[1]], [q[0], 0.004, q[1]], EDGE_BASE);
     // cut line: not where an opening crosses the cut height
@@ -497,7 +627,14 @@ export function buildFloorGeometry(
     // top line: not where an opening reaches the top; a wall below the cut height keeps its top line;
     // under a roof it follows the slope in short steps
     const H = wallHeight(e.wall, floor.height);
-    for (const [p, q] of subtractSpans(e, spansOf(e.wall, (sp) => sp.top >= H - 0.021))) {
+    // an opening reaches the top unless the wall rises above it under a dormer (#1156)
+    const eAx = unit([e.wall.b[0] - e.wall.a[0], e.wall.b[1] - e.wall.a[1]]);
+    const reachesTop = (sp: Span) => {
+      if (sp.top < H - 0.021) return false;
+      const m = (sp.s0 + sp.s1) / 2;
+      return !roofRise || topAt(e.wall.a[0] + eAx[0] * m, e.wall.a[1] + eAx[1] * m, H, e.wall) <= sp.top + 0.021;
+    };
+    for (const [p, q] of subtractSpans(e, spansOf(e.wall, reachesTop))) {
       if (!roofUnder && !e.wall.slope) {
         lines.seg([p[0], H, p[1]], [q[0], H, q[1]], EDGE_TOP, H <= cut + 1e-6 ? LOWER_OFFSET + b : b);
         continue;
@@ -509,7 +646,20 @@ export function buildFloorGeometry(
         if (buried(a[0], a[1]) && buried(c[0], c[1])) continue;
         const ya = topAt(a[0], a[1], H, e.wall);
         const yc = topAt(c[0], c[1], H, e.wall);
-        lines.seg([a[0], ya, a[1]], [c[0], yc, c[1]], EDGE_TOP, Math.max(ya, yc) <= cut + 1e-6 ? LOWER_OFFSET + b : b);
+        const fold = (y0: number, y1: number) => (Math.max(y0, y1) <= cut + 1e-6 ? LOWER_OFFSET + b : b);
+        // where the roof jumps (the edge of a dormer's opening) the line steps straight up or down (#1145)
+        const pt = (k: number): Vec2 => [a[0] + (c[0] - a[0]) * k, a[1] + (c[1] - a[1]) * k];
+        const top = (k: number) => topAt(pt(k)[0], pt(k)[1], H, e.wall);
+        const j = topJump(top, 0, 1, 0.01, Math.hypot(c[0] - a[0], c[1] - a[1]));
+        if (!j) {
+          lines.seg([a[0], ya, a[1]], [c[0], yc, c[1]], EDGE_TOP, fold(ya, yc));
+          continue;
+        }
+        const [p0, p1] = [pt(j[0]), pt(j[1])];
+        const [y0, y1] = [top(j[0]), top(j[1])];
+        lines.seg([a[0], ya, a[1]], [p0[0], y0, p0[1]], EDGE_TOP, fold(ya, y0));
+        lines.seg([p0[0], y0, p0[1]], [p1[0], y1, p1[1]], EDGE_TOP, fold(y0, y1));
+        lines.seg([p1[0], y1, p1[1]], [c[0], yc, c[1]], EDGE_TOP, fold(y1, yc));
       }
     }
   }
@@ -519,6 +669,13 @@ export function buildFloorGeometry(
     // the corner line reaches up to the tallest wall meeting there, not to whichever came first (#417)
     const tall = c.walls.reduce((m, w) => (topOfWall(w, c.p) > topOfWall(m, c.p) + 1e-6 ? w : m), c.wall);
     const H = topAt(c.p[0], c.p[1], wallHeight(tall, floor.height), tall);
+    const open = c.walls.length === 1 ? openEnds.get(vkey(c.p)) : undefined;
+    if (open) {
+      // an open wall end: the corner stands only below the sill and above the opening
+      if (open.sill > 0.01) lines.segSplit([c.p[0], 0.004, c.p[1]], [c.p[0], open.sill, c.p[1]], EDGE_SOFT, cut, wallBucket.get(tall)!);
+      if (H > open.top + 0.01) lines.segSplit([c.p[0], open.top, c.p[1]], [c.p[0], H, c.p[1]], EDGE_SOFT, Math.min(cut, H), wallBucket.get(tall)!);
+      continue;
+    }
     lines.segSplit([c.p[0], 0.004, c.p[1]], [c.p[0], H, c.p[1]], EDGE_SOFT, Math.min(cut, H), wallBucket.get(tall)!);
   }
   // a joint between walls of different heights: the taller wall's end stands free above the lower one, so
@@ -539,12 +696,13 @@ export function buildFloorGeometry(
       if (high - low > 0.01) lines.segSplit([p[0], low, p[1]], [p[0], high, p[1]], EDGE_SOFT, cut, b);
     }
   }
-  for (const list of spans.values()) for (const sp of list) if (!sp.cont) pushOpeningLines(lines, sp, cut);
+  for (const list of spans.values()) for (const sp of list) if (!sp.cont) pushOpeningLines(lines, sp, cut, openAt);
 
   // ---------------------------------------------------------------- furniture and shadows
   const shadow = buildShadow(outline.edges, floor.rooms, spans);
   const waterBuf = new GeoBuffer();
   pushOutdoor(wallBuf, lines, floor, waterBuf);
+  if (surroundings) pushSurroundings(wallBuf, lines, surroundings, groundLevel(floor) + surroundings.y);
   for (const s of solar) pushModules(wallBuf, lines, s.face, s.field, floor.elevation);
 
   // lamps are drawn live by the viewer (they glow with their light)
@@ -589,7 +747,7 @@ export function buildFloorGeometry(
 }
 
 /** Jambs, sill and lintel edges of an opening on both wall faces, split at the cut height. */
-function pushOpeningLines(lines: LineBuffer, sp: Span, cut: number): void {
+function pushOpeningLines(lines: LineBuffer, sp: Span, cut: number, openAt: (p: Vec2) => boolean): void {
   const { info } = sp;
   const b = info.bucket;
   const at = (s: number, n: number, y: number) => [
@@ -599,8 +757,13 @@ function pushOpeningLines(lines: LineBuffer, sp: Span, cut: number): void {
   ];
   const foldAt = (y: number) => (y > cut + 1e-6 ? b : ALWAYS);
   const bottom = Math.max(sp.sill, 0.004);
+  // a jamb at an open wall end has no wall beside it: no jamb line there (#1158)
+  const open = (s: number, n: number) => {
+    const p = at(s, n, 0);
+    return openAt([p[0], p[2]]);
+  };
   for (const n of [info.faceRoom, -info.faceOut]) {
-    for (const s of [sp.s0, sp.s1]) lines.segSplit(at(s, n, bottom), at(s, n, sp.top), EDGE_SOFT, cut, b);
+    for (const s of [sp.s0, sp.s1]) if (!open(s, n)) lines.segSplit(at(s, n, bottom), at(s, n, sp.top), EDGE_SOFT, cut, b);
     lines.seg(at(sp.s0, n, sp.top), at(sp.s1, n, sp.top), EDGE_SOFT, foldAt(sp.top));
     if (sp.sill > 0.01) lines.seg(at(sp.s0, n, sp.sill), at(sp.s1, n, sp.sill), EDGE_SOFT, foldAt(sp.sill));
   }
@@ -608,7 +771,7 @@ function pushOpeningLines(lines: LineBuffer, sp: Span, cut: number): void {
   for (const s of [sp.s0, sp.s1]) {
     lines.seg(at(s, info.faceRoom, sp.top), at(s, -info.faceOut, sp.top), EDGE_SOFT, foldAt(sp.top));
     if (sp.sill > 0.01) lines.seg(at(s, info.faceRoom, sp.sill), at(s, -info.faceOut, sp.sill), EDGE_SOFT, foldAt(sp.sill));
-    if (sp.sill < cut && sp.top > cut) lines.seg(at(s, info.faceRoom, cut), at(s, -info.faceOut, cut), EDGE_CUT, CUT_OFFSET + b);
+    if (sp.sill < cut && sp.top > cut && !open(s, info.faceRoom) && !open(s, -info.faceOut)) lines.seg(at(s, info.faceRoom, cut), at(s, -info.faceOut, cut), EDGE_CUT, CUT_OFFSET + b);
   }
 }
 
@@ -767,6 +930,18 @@ function subtractSpans(e: OutlineEdge, list: Span[]): [Vec2, Vec2][] {
   return parts.filter(([p, q]) => q - p > 1e-4).map(([p, q]) => (ta <= tb ? [at(p), at(q)] : [at(q), at(p)]));
 }
 
+/** The opening that reaches a free wall end, when the outline edge is that end's face (across the wall). */
+function openEndSpan(e: OutlineEdge, list: Span[]): Span | undefined {
+  if (!list.length) return undefined;
+  const ax = unit([e.wall.b[0] - e.wall.a[0], e.wall.b[1] - e.wall.a[1]]);
+  const ex = unit([e.b[0] - e.a[0], e.b[1] - e.a[1]]);
+  if (Math.abs(ax[0] * ex[0] + ax[1] * ex[1]) >= 0.99) return undefined;
+  const t = (p: Vec2) => (p[0] - e.wall.a[0]) * ax[0] + (p[1] - e.wall.a[1]) * ax[1];
+  const lo = Math.min(t(e.a), t(e.b));
+  const hi = Math.max(t(e.a), t(e.b));
+  return list.find((sp) => lo >= sp.s0 - 1e-4 && hi <= sp.s1 + 1e-4);
+}
+
 /** Strips on the floor along every wall face that borders a room (not across doorways). */
 function buildShadow(edges: OutlineEdge[], rooms: readonly Room[], spans: Map<Wall, Span[]>): GeoBuffer {
   const buf = new GeoBuffer();
@@ -774,7 +949,9 @@ function buildShadow(edges: OutlineEdge[], rooms: readonly Room[], spans: Map<Wa
   const clear = new Color(1, 1, 1);
   const y = 0.002;
   for (const e of edges) {
-    for (const [a, b] of subtractSpans(e, (spans.get(e.wall) ?? []).filter((sp) => sp.sill <= 0.005))) {
+    const doorways = (spans.get(e.wall) ?? []).filter((sp) => sp.sill <= 0.005);
+    if (openEndSpan(e, doorways)) continue;
+    for (const [a, b] of subtractSpans(e, doorways)) {
       const dx = b[0] - a[0];
       const dz = b[1] - a[1];
       const l = Math.hypot(dx, dz);
@@ -806,7 +983,11 @@ export function stairHoleParts(floors: readonly Floor[], floor: Floor): Vec2[][]
   if (!below) return own;
   const stairs = below.furniture
     .filter((f) => (STAIR_TYPES.has(f.type) || packItem(f.type)?.hole) && below.elevation + f.h >= floor.elevation - 0.3)
-    .flatMap((f) => (f.type === "stairs_u" ? uStairHole(f) : [furnitureFootprint(f)]));
+    .flatMap((f) => {
+      if (f.type === "stairs_u") return uStairHole(f);
+      const item = packItem(f.type);
+      return item?.hole ? packStairHole(f, item) : [furnitureFootprint(f)];
+    });
   // overlapping openings become one outline (an L-shaped stairwell made of two) – after cutting, room by room
   return [...own, ...stairs];
 }
@@ -833,7 +1014,71 @@ export function uStairHole(f: Furniture): Vec2[][] {
   return [rect(-f.w / 2, -f.d / 2, xb0, f.d / 2), rect(xb0, -f.d / 2, f.w / 2, zTop)];
 }
 
+/**
+ * The opening a pack stair needs (#1073): where its parts stand – treads, landings, flights – instead of its whole box.
+ * An L-stair leaves the corner beside its first flight empty, and the floor above keeps it there. Each part is grown
+ * by a centimetre so neighbouring treads overlap and merge into one outline.
+ */
+export function packStairHole(f: Furniture, item: PackItem): Vec2[][] {
+  const a = (f.rotation * Math.PI) / 180;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  const mx = f.mirror ? -1 : 1;
+  const tf = (lx: number, lz: number): Vec2 => [f.x + mx * lx * c - lz * s, f.z + mx * lx * s + lz * c];
+  const grow = 0.01;
+  const out: Vec2[][] = [];
+  for (const p of fitParts(item, f.w, f.d, f.h)) {
+    // a loft's footprint takes in its top rectangle as well
+    const tx = p.tx ?? p.x;
+    const tz = p.tz ?? p.z;
+    const tw = p.tw ?? p.w;
+    const td = p.td ?? p.d;
+    const x0 = Math.min(p.x - p.w / 2, tx - tw / 2) * f.w - grow;
+    const x1 = Math.max(p.x + p.w / 2, tx + tw / 2) * f.w + grow;
+    const z0 = Math.min(p.z - p.d / 2, tz - td / 2) * f.d - grow;
+    const z1 = Math.max(p.z + p.d / 2, tz + td / 2) * f.d + grow;
+    if (x1 - x0 < 0.03 || z1 - z0 < 0.03) continue;
+    // a turned part turns around its own centre, as the model draws it
+    const cx = p.x * f.w;
+    const cz = p.z * f.d;
+    const r = p.rot ? (p.rot * Math.PI) / 180 : 0;
+    const rc = Math.cos(r);
+    const rs = Math.sin(r);
+    const turn = (x: number, z: number): Vec2 => (r ? tf(cx + (x - cx) * rc - (z - cz) * rs, cz + (x - cx) * rs + (z - cz) * rc) : tf(x, z));
+    const ring = [turn(x0, z0), turn(x1, z0), turn(x1, z1), turn(x0, z1)];
+    out.push(f.mirror ? ring.reverse() : ring);
+  }
+  return out.length ? out : [furnitureFootprint(f)];
+}
+
 /** How tall a wall stands: its own height (a low wall, a counter), never above the floor height. */
+/**
+ * Where a wall's top along its length jumps between `lo` and `hi` (the edge of a dormer's opening in the roof, #1145):
+ * two points a hair apart with the jump between them, or null where the top runs on without a jump of at least `min`
+ * (a ridge or a slope is none). `scale` is the length of the stretch in metres when `lo`…`hi` is not.
+ */
+export function topJump(top: (t: number) => number, lo: number, hi: number, min = 0.01, scale = hi - lo): [number, number] | null {
+  if (hi - lo <= 0 || scale < 1e-3) return null;
+  let a = top(lo);
+  let c = top(hi);
+  // a straight top (one roof plane) has its middle halfway between its ends; a jump puts it half the jump off
+  if (Math.abs(top((lo + hi) / 2) - (a + c) / 2) < min / 4) return null;
+  // halve towards the side that changes most, down to well under a millimetre
+  const steps = Math.ceil(Math.log2(scale / 1e-6));
+  for (let i = 0; i < steps; i++) {
+    const mid = (lo + hi) / 2;
+    const m = top(mid);
+    if (Math.abs(m - a) >= Math.abs(c - m)) {
+      hi = mid;
+      c = m;
+    } else {
+      lo = mid;
+      a = m;
+    }
+  }
+  return Math.abs(c - a) >= min ? [lo, hi] : null;
+}
+
 export function wallHeight(wall: Wall, floorHeight: number): number {
   // a sloping wall may rise above the floor height at its high end (a lean-to's tall side, D569)
   if (wall.slope) return Math.max(wall.slope.h0, wall.slope.h1);

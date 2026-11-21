@@ -7,10 +7,10 @@
 **Draw your home right inside Home Assistant – and live in it as a glowing neon house, or in any style you like.**<br>
 Lights glow in their colours, blinds move, doors open, cameras watch, energy flows through the walls – and you can simply talk to it.
 
-[![Open your Home Assistant instance and open the NeonPlan 3D repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Mastershort&repository=neonplan3d&category=integration)
+[![Open your Home Assistant instance and open the NeonPlan 3D repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=Mastershort&repository=neonplan3d&category=integration)
 
 [![Latest release](https://img.shields.io/github/v/release/Mastershort/neonplan3d?label=release&color=00e5ff)](https://github.com/Mastershort/neonplan3d/releases)
-[![HACS default](https://img.shields.io/badge/HACS-default-41BDF5?logo=homeassistantcommunitystore&logoColor=white)](https://hacs.xyz/)
+[![Home Assistant Marketplace](https://img.shields.io/badge/Marketplace-default-41BDF5?logo=homeassistant&logoColor=white)](https://www.home-assistant.io/integrations/marketplace/)
 [![Free & open source](https://img.shields.io/badge/free-open%20source%20(MIT)-2ea44f)](https://github.com/Mastershort/neonplan3d/blob/main/LICENSE)
 [![Runs locally](https://img.shields.io/badge/cloud-none%20needed-8a2be2)](#privacy)
 [![Discord](https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white)](https://discord.gg/SSdVVFsev7)
@@ -44,6 +44,16 @@ Lights glow in their colours, blinds move, doors open, cameras watch, energy flo
 
 ---
 
+## 🪄 New in 3.4 – furniture that lives
+
+[![The same kitchen with its door contacts closed and open](https://raw.githubusercontent.com/Mastershort/neonplan3d/main/docs/images/live-furniture-hero-en.jpg)](https://github.com/Mastershort/neonplan3d/releases)
+
+- 🚪 **Doors, drawers and flaps move with Home Assistant** – open the fridge and its door opens in 3D, the oven door folds down, a drawer slides out. Status lights glow, fans turn, prints grow with their progress. Try it free with the kitchen and bedroom taster packs.
+- 🎨 **Finishes, free for everyone** – your own colours for wood, fabric and fronts of every piece of furniture in the homely styles.
+- 🔒 **Every piece of furniture at a glance** – the library also shows what the packs hold, with a lock and a picture.
+
+---
+
 ## 🎨 New in 3.1 – your home in every style
 
 You love the neon. But on the living-room wall in the evening, a homely house with wooden floors and warm walls is sometimes just nicer. **Now you choose.** The editor and the controls stay neon – the house wears whatever you like.
@@ -59,6 +69,12 @@ You love the neon. But on the living-room wall in the evening, a homely house wi
 - 📱 **Still runs on old wall tablets** – the styles only colour differently, they cost no extra performance.
 
 Pick a style in the 3D view under **⚙ → 🎨**, build your own under **⚙ Settings → 🎨 Styles** in the editor. [How it all works →](docs/manual.md#512-styles-new-in-31)
+
+### 🔍 New in 3.2 – zoom in and it turns homely
+
+Neon from afar, homely up close: pick a second style under **When zooming in** and the house flows into it as you come closer – just the room you zoom into, or every room. No reload, still fine on old wall tablets.
+
+[![Zooming into the living room: it turns homely while the kitchen next to it stays neon](https://raw.githubusercontent.com/Mastershort/neonplan3d/main/docs/images/zoom-style.webp)](docs/manual.md#512-styles-new-in-31)
 
 ---
 
@@ -180,6 +196,8 @@ Plus **Auto** (day while the sun is up, neon after sunset), an accent colour of 
 
 **Safety is always free. Everything you need day to day stays free.**
 
+🎁 **Free customer account (optional):** an account at [mastershort.de](https://mastershort.de/my-account/) costs nothing and needs no purchase. It brings the fun packs, the modules Window watch and The house answers and – with the newsletter – four taster packs of furniture. Enter its key under ✦ Extensions → Shop connection; they update by themselves.
+
 ---
 
 ## ⭐ Optional extras
@@ -206,9 +224,9 @@ Bought packs and modules are signed for your installation and update by themselv
 
 ## 📦 Installation
 
-[![Open your Home Assistant instance and open the NeonPlan 3D repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Mastershort&repository=neonplan3d&category=integration)
+[![Open your Home Assistant instance and open the NeonPlan 3D repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=Mastershort&repository=neonplan3d&category=integration)
 
-1. Click the button above, or open HACS and search for **NeonPlan 3D** (it is in the HACS default list).
+1. Click the button above, or open **Settings → Marketplace** and search for **NeonPlan 3D** (it is in the default list). On Home Assistant before 2026.11, use HACS the same way.
 2. Install **NeonPlan 3D** and restart Home Assistant.
 3. Add the integration: [![Open your Home Assistant instance and start setting up NeonPlan 3D.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=neonplan3d) or *Settings → Devices & services → Add integration → NeonPlan 3D*.
 4. Open **NeonPlan 3D** in the sidebar, switch to **Editor** and draw your first floor – or import a plan. More buildings: **＋ New floor plan** at the top.

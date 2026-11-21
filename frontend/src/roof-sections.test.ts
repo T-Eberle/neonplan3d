@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { emptyBuilding, newFloor, ROOF_SHAPES, type Room, type RoofSection } from "./model.ts";
-import { onSection, sectionTurn, turnPoint, turnSectionAbout, coversIn, cutHole, cutUnder, dormerHole, dormerHoles, dormerParent, sectionsCut, turnedDormer, floorOutline, lineOutside, sectionCovers, sectionEnds, sectionUV, wingJunction, wingSection, offsetPolygon, polygonBox, proposeDormer, ridgeHeight, roofRider, roofSectionsFromRooms, roofUnderAt, sectionFrame, sectionGeometry, sectionHeightAt, sectionOverhang, sectionPolygon, sectionProfile, wallTopUnder } from "./roof-sections.ts";
+import { onSection, sectionTurn, turnPoint, turnSectionAbout, coversIn, crossAsWing, cutHole, cutUnder, dormerHole, dormerHoles, dormerParent, sectionsCut, turnedDormer, floorOutline, lineOutside, sectionCovers, sectionEnds, sectionUV, wingJunction, wingSection, offsetPolygon, polygonBox, proposeDormer, ridgeHeight, roofRider, roofSectionsFromRooms, roofUnderAt, sectionFrame, sectionGeometry, sectionHeightAt, sectionOverhang, sectionPolygon, sectionProfile, wallTopUnder } from "./roof-sections.ts";
 import { buildRoof } from "./viewer/roof.ts";
+import { roofFaces } from "./solar.ts";
 
 const near = (a: number, b: number, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 const rect = (id: string, x0: number, z0: number, x1: number, z1: number): Room => ({ id, name: id, area_id: null, points: [[x0, z0], [x1, z0], [x1, z1], [x0, z1]], floor_material: "wood" });
@@ -245,6 +246,47 @@ test("pyramid, half-hip and mansard: apex, shortened ridge and broken slopes; th
   near(sectionProfile(section({ shape: "parapet", eave_a: 3, eave_b: 3 })).y(5), 3);
 });
 
+test("a mansard's upper slope is 30° unless set; a steeper one lifts the ridge, the break stays (#1183)", () => {
+  const ov = { u0: 0, u1: 0, a: 0, b: 0 };
+  const t = (deg: number) => Math.tan((deg * Math.PI) / 180);
+  // 8 m wide, eaves 3 m, 70° below: the break 2.4 m up, 2.4 / tan 70° in from each eave; the ridge in the middle
+  const vl = 2.4 / t(70);
+  const base = sectionProfile(section({ shape: "mansard", pitch_a: 70, pitch_b: 70 }));
+  near(base.vr, 4);
+  near(base.rh, 5.4 + (4 - vl) * t(30));
+  near(base.y(vl), 5.4);
+  // no field, null and an explicit 30° draw the same roof as before
+  for (const pitch_upper of [null, undefined, 30]) {
+    const p = sectionProfile(section({ shape: "mansard", pitch_a: 70, pitch_b: 70, pitch_upper }));
+    near(p.rh, base.rh);
+    for (const v of [0, 0.5, vl, 2, 4, 6, 7.5, 8]) near(p.y(v), base.y(v));
+  }
+  // 45° above: the break stays where it was, the ridge rises
+  const steep = sectionProfile(section({ shape: "mansard", pitch_a: 70, pitch_b: 70, pitch_upper: 45 }));
+  near(steep.vr, 4);
+  near(steep.rh, 5.4 + (4 - vl));
+  assert.ok(steep.rh > base.rh + 1, "a steeper upper slope gives a higher ridge");
+  near(steep.y(vl), 5.4);
+  near(steep.y(8 - vl), 5.4);
+  near(steep.y(0.5), base.y(0.5));
+  // the planes follow: the ridge line and the height in the middle of the roof
+  const g = sectionGeometry(section({ shape: "mansard", pitch_a: 70, pitch_b: 70, pitch_upper: 45 }), ov);
+  near(g.ridges[0][0][2], steep.rh);
+  near(sectionHeightAt(g, 6, 4)!, steep.rh);
+  near(sectionHeightAt(g, 6, 3)!, steep.y(3));
+  assert.ok(g.gable && Math.abs(Math.max(...g.gable.map((q) => q[1])) - steep.rh) < 1e-6, "the gable wall reaches the new ridge");
+  // flatter than before lowers it; out of range is kept in 5 … 60
+  assert.ok(sectionProfile(section({ shape: "mansard", pitch_a: 70, pitch_b: 70, pitch_upper: 15 })).rh < base.rh);
+  near(sectionProfile(section({ shape: "mansard", pitch_a: 70, pitch_b: 70, pitch_upper: 89 })).rh, 5.4 + (4 - vl) * t(60));
+  near(sectionProfile(section({ shape: "mansard", pitch_a: 70, pitch_b: 70, pitch_upper: 0 })).rh, 5.4 + (4 - vl) * t(5));
+  // uneven eaves: the upper slopes still meet at one ridge, at the same height from both sides
+  const uneven = sectionProfile(section({ shape: "mansard", pitch_a: 70, pitch_b: 70, eave_b: 2.5, pitch_upper: 50 }));
+  near(uneven.y(uneven.vr - 1e-9), uneven.y(uneven.vr + 1e-9), 1e-6);
+  near(uneven.y(uneven.vr), uneven.rh);
+  // other shapes ignore the field
+  near(sectionProfile(section({ pitch_upper: 60 })).rh, sectionProfile(section()).rh);
+});
+
 test("a dormer sits on a side of its section, opens the slope under it and lifts the ceiling there", () => {
   // the 12 × 8 gable, ridge along x, eaves 2.5 m, 45°: a dormer on side a (the low-z side)
   const parent = section({ eave_a: 2.5, eave_b: 2.5, base: 2.5 });
@@ -292,6 +334,26 @@ test("a roof drawn over an upper floor with a hole in its middle sits on the upp
   const top = wallTopUnder(b, 0, 0, 10, 8);
   assert.equal(top, 5.25);
   assert.equal(sectionFloor(b, { base: top! })?.id, "og");
+});
+
+test("in a split-level house each roof sits on the floor under it, not on the highest one beside it (#1097)", async () => {
+  const { sectionFloor } = await import("./roof-sections.ts");
+  const { emptyBuilding, newFloor } = await import("./model.ts");
+  const b = emptyBuilding();
+  const room = (id: string, x0: number, z0: number, x1: number, z1: number) => ({ id, name: id, area_id: null, points: [[x0, z0], [x1, z0], [x1, z1], [x0, z1]] as [number, number][], floor_material: "wood" as const });
+  // two halves on a slope, half a storey apart: west 0–6 (granny flat, ground floor), east 6–12 (basement, upper floor)
+  b.floors = [
+    { ...newFloor("flat", "Flat", -2.6), height: 2.58, rooms: [room("w1", 0, 0, 6, 8)] },
+    { ...newFloor("ug", "UG", -1.387), height: 2.58, rooms: [room("e1", 6, 0, 12, 8)] },
+    { ...newFloor("eg", "EG", 0), height: 2.6, rooms: [room("w2", 0, 0, 6, 8)] },
+    { ...newFloor("og", "OG", 1.213), height: 2.81, rooms: [room("e2", 6, 0, 12, 8)] },
+  ];
+  const west = { base: 2.6, x0: -0.24, z0: -0.24, x1: 6, z1: 8.24 };
+  const east = { base: 4.02, x0: 6, z0: -0.24, x1: 12.24, z1: 8.24 };
+  assert.equal(sectionFloor(b, west)?.id, "eg");
+  assert.equal(sectionFloor(b, east)?.id, "og");
+  // without its rectangle: the highest floor below, as before
+  assert.equal(sectionFloor(b, { base: 2.6 })?.id, "og");
 });
 
 test("pulled apart, a roof rides with the loft under its slopes, a garage roof with its own floor (#202, D207)", () => {
@@ -515,4 +577,107 @@ test("a wall face a few millimetres outside its roof ends under that roof, not u
   assert.ok(roofUnderAt(b, 0.9, 5, level)! < 3.1);
   // beside a roof with nothing else above: still no roof at all
   assert.equal(roofUnderAt({ settings: { roof: { ...b.settings.roof, sections: [main] } } }, 1.107, 5, level), null);
+});
+
+test("a cross gable as high as a roof with a hipped end meets it like a wing, nothing of either stays under the other (#970)", () => {
+  // the main roof runs along z with a hip at its z0 end; the cross gable runs along x into it, as wide and as high,
+  // flush with the hipped end: its slope on that side lies in the hip's plane
+  const b = emptyBuilding();
+  b.floors = [{ ...newFloor("eg", "EG", 0), height: 2.75, rooms: [rect("main", 4, -2, 13, 12), rect("wing", 2, -2, 4, 7.3)] }];
+  const main = section({ id: "main", x0: 4, z0: -2, x1: 13, z1: 12, axis: "z", eave_a: 2.75, eave_b: 2.75, pitch_a: 40, pitch_b: 40, base: 2.75, end_u0: "hip", end_u1: "gable" });
+  const wing = section({ id: "wing", x0: 2, z0: -2, x1: 8.5, z1: 7, axis: "x", eave_a: 2.75, eave_b: 2.75, pitch_a: 40, pitch_b: 40, base: 2.75, overhang: 0, dormer: true });
+  const sections = [main, wing];
+  assert.equal(dormerParent(sections, wing), main);
+  assert.ok(crossAsWing(sections, wing), "as high as its roof: cut like a wing");
+  assert.ok(sectionsCut(sections, main, wing));
+  // a real dormer, lower than the ridge, still opens a hole in the slope
+  const low = section({ id: "low", x0: 4, z0: 6, x1: 6, z1: 8, axis: "x", eave_a: 4, eave_b: 4, pitch_a: 35, pitch_b: 35, base: 2.75, dormer: true });
+  assert.ok(!crossAsWing([main, low], low));
+  b.settings.roof = { type: "custom", pitch: 40, overhang: 0, sections };
+  const height = (s: RoofSection, x: number, z: number) => {
+    const fr = sectionFrame(s);
+    const [u, v] = sectionUV(s, x, z);
+    if (u < fr.u0 || u > fr.u1 || v < 0 || v > fr.w) return null;
+    return sectionHeightAt(sectionGeometry(s, { u0: 0, u1: 0, a: 0, b: 0 }), u, v);
+  };
+  const [part] = buildRoof(b);
+  const p = part.solid.p;
+  const c = part.solid.c;
+  // the top faces (the lighter colour) where both roofs are: none lies under the higher of the two
+  const topShade = Math.max(...c.filter((_, i) => i % 3 === 0));
+  let both = 0;
+  for (let t = 0; t + 8 < p.length; t += 9) {
+    if (c[t] < topShade - 1e-6) continue;
+    const x = (p[t] + p[t + 3] + p[t + 6]) / 3;
+    const y = (p[t + 1] + p[t + 4] + p[t + 7]) / 3 + part.floor.elevation;
+    const z = (p[t + 2] + p[t + 5] + p[t + 8]) / 3;
+    const hm = height(main, x, z);
+    const hw = height(wing, x, z);
+    if (hm === null || hw === null || (Math.abs(y - hm) > 0.2 && Math.abs(y - hw) > 0.2)) continue;
+    both++;
+    assert.ok(y >= Math.max(hm, hw) - 0.05, `a face at (${x.toFixed(2)}, ${z.toFixed(2)}) stands ${(Math.max(hm, hw) - y).toFixed(2)} m under the other roof`);
+  }
+  assert.ok(both >= 4, `faces where both roofs are: ${both}`);
+});
+
+test("a flat roof opens under its roof windows: the glass looks into the room below, not onto the slab (#1078)", () => {
+  const b = emptyBuilding();
+  b.floors = [{ ...newFloor("eg", "EG", 0), rooms: [rect("a", 0, 0, 12, 8)] }];
+  const flat = section({ id: "f", shape: "flat", base: 2.5, eave_a: 2.5, eave_b: 2.5, pitch_a: 0, pitch_b: 0, overhang: 0 });
+  // the slab's faces crossing the vertical line through a plan point (x, z)
+  const hits = (x: number, z: number) => {
+    const p = buildRoof(b)[0].solid.p;
+    let n = 0;
+    for (let i = 0; i < p.length; i += 9) {
+      const [ax, az, bx, bz, cx, cz] = [p[i], p[i + 2], p[i + 3], p[i + 5], p[i + 6], p[i + 8]];
+      const d = (bx - ax) * (cz - az) - (cx - ax) * (bz - az);
+      if (Math.abs(d) < 1e-12) continue;
+      const s = ((x - ax) * (cz - az) - (cx - ax) * (z - az)) / d;
+      const t = ((bx - ax) * (z - az) - (x - ax) * (bz - az)) / d;
+      if (s > 0 && t > 0 && s + t < 1) n++;
+    }
+    return n;
+  };
+  b.settings.roof = { type: "custom", pitch: 40, overhang: 0, sections: [flat] };
+  // the slab: its top and its underside
+  assert.equal(hits(4, 3), 2);
+  const face = roofFaces(b).find((f) => f.flat)!;
+  // a 1 × 1 m window with its lower left corner 3 m along and 2 m across the face
+  b.settings.roof.windows = [{ id: "w", face: face.key, u: 3, v: 2, w: 1, h: 1, cover: null, contact: null, tilt: null }];
+  const at = (u: number, v: number) => [face.o[0] + face.eu[0] * u + face.es[0] * v, face.o[2] + face.eu[2] * u + face.es[2] * v];
+  const [mx, mz] = at(3.5, 2.5);
+  assert.equal(hits(mx, mz), 0, "the slab is open under the window");
+  // beside the window the slab is closed as before
+  const [ox, oz] = at(5, 2.5);
+  assert.equal(hits(ox, oz), 2);
+  // a window reaching past the slab's rim leaves the slab closed (no cut through the edge)
+  b.settings.roof.windows = [{ id: "w", face: face.key, u: face.lu - 0.5, v: 2, w: 1, h: 1, cover: null, contact: null, tilt: null }];
+  const [ex, ez] = at(face.lu - 0.2, 2.5);
+  assert.ok(hits(ex, ez) >= 2);
+});
+
+test("the single flat roof opens under its roof windows too (#1078)", () => {
+  const b = emptyBuilding();
+  b.floors = [{ ...newFloor("eg", "EG", 0), rooms: [rect("a", 0, 0, 12, 8)] }];
+  b.settings.roof = { type: "flat", pitch: 0, overhang: 0.3 };
+  const face = roofFaces(b).find((f) => f.flat)!;
+  const solid = () => buildRoof(b)[0].solid.p.length;
+  const closed = solid();
+  b.settings.roof.windows = [{ id: "w", face: face.key, u: 3, v: 2, w: 1, h: 1, cover: null, contact: null, tilt: null }];
+  // the slab gains the opening's sides and is triangulated round it
+  assert.ok(solid() > closed);
+});
+
+test("a roof that begins at a floor's own level sits on that floor: its rooms are the attic (#1199)", async () => {
+  const { sectionFloor } = await import("./roof-sections.ts");
+  const { emptyBuilding, newFloor } = await import("./model.ts");
+  const b = emptyBuilding();
+  const room = (id: string, x0: number, z0: number, x1: number, z1: number) => ({ id, name: id, area_id: null, points: [[x0, z0], [x1, z0], [x1, z1], [x0, z1]] as [number, number][], floor_material: "wood" as const });
+  b.floors = [
+    { ...newFloor("eg", "EG", 0), height: 2.4, rooms: [room("a", 0, 0, 13, 9), room("g", 13, 0, 20, 6)] },
+    { ...newFloor("og", "OG", 2.6), height: 2.4, rooms: [room("b", 0, 0, 13, 9)] },
+  ];
+  assert.equal(sectionFloor(b, { base: 2.6, x0: -0.5, z0: -0.5, x1: 13.5, z1: 9.5 })?.id, "og");
+  // the garage roof beside it at the same height has no room of the upper floor under it
+  assert.equal(sectionFloor(b, { base: 2.6, x0: 13, z0: 0, x1: 20, z1: 6 })?.id, "eg");
 });

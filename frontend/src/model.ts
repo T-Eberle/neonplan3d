@@ -35,6 +35,11 @@ export interface Room {
   start_view?: StartView | null;
   points: Vec2[];
   floor_material: string;
+  /**
+   * The room's name moved from its middle in the plan and in 3D, in metres (null: in the middle) – where names of
+   * small rooms would cover each other. An offset, so it moves along with the room.
+   */
+  label_offset?: Vec2 | null;
   /** Entities shown in the room's panel although they are not in the plan. */
   panel?: string[];
   /** Entities of the room's area kept out of the room panel. */
@@ -107,6 +112,8 @@ export interface Opening {
   top_hung?: boolean;
   /** Look of the door or window (null = automatic: a front door in an exterior wall, else a room door). */
   style?: OpeningStyle | null;
+  /** A garage door's kind: a sectional door (null) or an up-and-over door, one leaf that swings out and up. */
+  garage_kind?: "sectional" | "tilt" | null;
   /** One sidelight: on the hinge side instead of opposite the hinge. */
   sidelight_hinge?: boolean;
   /** Width of the sidelight(s) in m (null = automatic); with two, `sidelight_width2` is the right one (seen from the room). */
@@ -235,6 +242,16 @@ export interface Furniture {
   bin_kind?: "rest" | "bio" | "paper" | "plastic" | "glass" | "garden" | "recycling" | "other" | null;
   /** Waste bin: its body colour ("#rrggbb"; null = the usual one of its kind in the country). */
   bin_color?: string | null;
+  /**
+   * Own colours in the homely styles (finishes.ts): wood, fabric (and cushions), fronts and the carcass ("body"),
+   * "#rrggbb" each; missing = the look's own (the carcass follows the fronts while it has none).
+   */
+  finish?: { wood?: string | null; fabric?: string | null; front?: string | null; body?: string | null } | null;
+  /** Live parts of a pack item (3.4): the entity of each of its slots (slot id -> entity id). */
+  binds?: Record<string, string> | null;
+  /** Neon sign: its own text (one or two lines, split with |) and the colour of its tubes while no light gives one. */
+  sign_text?: string | null;
+  sign_color?: string | null;
   /** Waste bin: its lid colour ("#rrggbb"; null = like the body, or the country's usual lid). */
   bin_lid?: string | null;
   /** Haushalt Pro: the waste calendar (calendar.*) or a sensor with the next pickup of this bin. */
@@ -450,6 +467,8 @@ export interface FreeWall {
   height?: number | null;
   /** A sloping top (#834): the height at end a and at end b, straight in between; null = the plain height. */
   slope?: [number, number] | null;
+  /** Colour of both sides ("#rrggbb"; null = the room's wall, or the facade outside the rooms), shown in the homely styles (#1101). */
+  color?: string | null;
 }
 
 /** "custom": the roof is made of sections (wings of an L- or T-shaped house, a barn, a lean-to …). */
@@ -483,6 +502,11 @@ export interface RoofSection {
   /** Slopes in degrees. */
   pitch_a: number;
   pitch_b: number;
+  /**
+   * Mansard only: the slope of the upper, flatter part up to the ridge in degrees (5 … 60); pitch_a and pitch_b
+   * set the steep lower part. Null or missing = 30°, as every mansard drawn before (#1183).
+   */
+  pitch_upper?: number | null;
   /** Top of the walls below: gable and knee walls are built from here up to the roof. */
   base: number;
   /** Overhang beyond the walls (null = the roof setting). */
@@ -795,6 +819,10 @@ export interface BuildingSettings extends StylePlan {
   sun_patches?: boolean;
   /** The sun's arc over the house and the house's shadow on the ground (default on). */
   sun_shadow?: boolean;
+  /** The real sky behind the house: sunset colours, stars, the moon in its phase, clouds with the weather (default on). */
+  sky?: boolean;
+  /** "Anflug aus dem All": the view opens with a globe that dives in onto the house (default off). */
+  flyin?: boolean;
   /** What the sun's arc and its compass ring stand around: the house (null, default) or everything drawn on the plot (#833). */
   sun_arc?: "house" | "plot" | null;
   /** At night lit rooms throw their light out of the windows onto the ground in front (default on). */
@@ -809,7 +837,7 @@ export interface BuildingSettings extends StylePlan {
    * Haushalt Pro: from which hour the day before a bin glows (null = 14) and until which hour on the day (null = 12);
    * only the bins of the next pickup wear a tag (`bin_next_only`), tags only from `bin_days` days before (null = always).
    */
-  household?: { bin_from?: number | null; bin_until?: number | null; notes?: EntityRef; bin_next_only?: boolean | null; bin_days?: number | null } | null;
+  household?: { bin_from?: number | null; bin_until?: number | null; notes?: EntityRef; bin_next_only?: boolean | null; bin_days?: number | null; /** Calendars whose entries of today stand in "Today in the household". */ calendars?: string[] | null } | null;
   /** The floor the editor opens with (null: the first of the list) (D418). */
   editor_floor?: string | null;
   /** Located people in 3D: a neon figure (null = default), a pin, or not shown. */
@@ -818,6 +846,10 @@ export interface BuildingSettings extends StylePlan {
   halloween?: { ghost?: boolean } | null;
   /** Fun pack "Winter & Christmas": fairy lights along the eaves, snow on roof and lawn, the New Year's firework (winter.ts). */
   winter?: { roof_lights?: boolean; roof_entity?: string | null; roof_color?: boolean; roof_outline?: boolean; snow?: boolean; firework?: boolean } | null;
+  /** Size of the room names in 3D (null = 1, as before). */
+  label_scale?: number | null;
+  /** The neighbourhood from OpenStreetMap around the house (surroundings.ts), fetched once and kept in the plan. */
+  surroundings?: Surroundings | null;
   /** Plan lock: rooms, walls, doors, windows and outdoor areas cannot be moved by accident. */
   lock_plan?: boolean;
   /** The camera the house view opens with (3D view, card, kiosk); null = fitted from the front left. */
@@ -827,6 +859,59 @@ export interface BuildingSettings extends StylePlan {
 }
 
 /** A camera position around the house: azimuth and polar angle (radians) and the distance (m). */
+/** A building of the neighbourhood: its footprint in map metres (east, north from the origin) and its height. */
+export interface SurroundBuilding {
+  p: Vec2[];
+  h: number;
+}
+
+/** A street, path, railway or stream as a centre line in map metres, with its width. */
+export interface SurroundWay {
+  p: Vec2[];
+  w: number;
+  k: "road" | "path" | "rail" | "water";
+}
+
+/** A flat area of the neighbourhood: water, a green (park, meadow) or a wood. */
+export interface SurroundArea {
+  p: Vec2[];
+  k: "water" | "green" | "wood";
+}
+
+/**
+ * The neighbourhood around the house from OpenStreetMap (© OpenStreetMap contributors, ODbL): fetched once at the
+ * home's location and kept in the plan. Coordinates are map metres from the origin (east, north); the plan turns
+ * them by its north and puts the origin at (x, z).
+ */
+export interface Surroundings {
+  /** Shown in 3D (the data stays when it is switched off). */
+  on: boolean;
+  /** Where it was fetched (degrees) and when (unix seconds), and the radius in metres. */
+  lat: number;
+  lon: number;
+  at: number;
+  radius: number;
+  /** The plan point the origin lies on. */
+  x: number;
+  z: number;
+  /** The map building that is the house itself (not drawn: the plan stands there); null = none picked. */
+  own?: number | null;
+  /** Map buildings hidden by hand, and ones shown although they stand where the plan has the house (indices). */
+  hide?: number[];
+  show?: number[];
+  /** The neighbours' houses only as their outline on the ground instead of blocks. */
+  flat?: boolean;
+  /** The neighbours' houses with a simple gable roof instead of a flat top (large buildings stay blocks). */
+  roofs?: boolean;
+  /** The whole map shifted up or down (m), where the street lies higher or lower than the ground floor (#1148). */
+  y?: number;
+  buildings: SurroundBuilding[];
+  ways: SurroundWay[];
+  areas: SurroundArea[];
+  /** Single trees (map metres). */
+  trees: Vec2[];
+}
+
 export interface StartView {
   theta: number;
   phi: number;
@@ -1476,12 +1561,13 @@ export const FURNITURE_TYPES = [
   "lamp_fan",
   "wifi_ap",
   "water_heater",
+  "neon_sign",
 ] as const;
 
 /** Furniture library sections (the editor lists them in this order). */
 export const FURNITURE_GROUPS: Record<string, FurnitureType[]> = {
   lights: ["lamp_ceiling", "lamp_downlight", "lamp_spot", "lamp_panel", "lamp_pendant", "lamp_fan", "lamp_floor", "lamp_uplight", "lamp_table", "lamp_wall", "led_strip", "lamp_bollard", "lamp_garden"],
-  living: ["sofa", "sofa_l", "sofa_u", "armchair", "stool", "coffee_table", "tv_board", "tv_wall", "sideboard", "shelf", "plant", "rug"],
+  living: ["sofa", "sofa_l", "sofa_u", "armchair", "stool", "coffee_table", "tv_board", "tv_wall", "sideboard", "shelf", "plant", "rug", "neon_sign"],
   dining: ["table", "table_round", "chair", "bench", "corner_bench", "bar_stool"],
   kitchen: ["kitchen", "kitchen_wall", "kitchen_tall", "island", "worktop", "sink", "stove", "dishwasher", "fridge"],
   sleeping: ["bed", "bunk_bed", "nightstand", "wardrobe", "dresser"],
@@ -1638,6 +1724,9 @@ export function builtinBase(f: Pick<Furniture, "type" | "h"> & { variant?: strin
       return 1.45;
     case "tv_wall":
       return Math.max(0, 1.3 - f.h / 2);
+    case "neon_sign":
+      // a neon sign hangs on the wall, its middle at 1.6 m
+      return Math.max(0, 1.6 - f.h / 2);
     case "radiator":
       return 0.12;
     case "ac_unit":
@@ -1742,6 +1831,7 @@ export const ELECTRIC_FURNITURE = new Set<string>([
   "pool_dosing",
   "tv_board",
   "tv_wall",
+  "neon_sign",
   "desk",
   "fridge",
   "fridge_smart",
@@ -1818,6 +1908,8 @@ export const FURNITURE_SIZE: Record<FurnitureType, [number, number, number]> = {
   // a 240 l wheelie bin; a wall mailbox
   waste_bin: [0.58, 0.73, 1.07],
   mailbox: [0.38, 0.14, 0.34],
+  // a neon sign on its dark acrylic plate
+  neon_sign: [0.9, 0.03, 0.32],
   // a single plate; more gangs make it wider (gangPlateWidth)
   wall_switch: [0.085, 0.012, 0.085],
   wall_socket: [0.085, 0.014, 0.085],
@@ -1966,7 +2058,7 @@ export function normalizeBuilding(b: Building): Building {
     f.rooms = f.rooms.map((r) => ({ ...r, panel: r.panel ?? [] }));
     f.ha_floor = f.ha_floor ?? null;
     f.placements = f.placements.map((p) => ({ ...p, mount: p.mount ?? null, rotation: p.rotation ?? 0 }));
-    f.furniture = f.furniture.map((m) => ({ ...m, entity: m.entity ?? null, power: m.power ?? null }));
+    f.furniture = f.furniture.map((m) => ({ ...m, entity: m.entity ?? null, power: m.power ?? null, ...(m.show_if && !m.show_if.entity ? { show_if: null } : {}) }));
     // lights placed as devices (before lamps existed) become lamps of their mount type
     // (a light turned back into a pin on purpose stays a pin)
     const lights = f.placements.filter((p) => p.entity_id.startsWith("light.") && !p.pin);
@@ -2011,6 +2103,53 @@ export function signedArea(points: readonly Vec2[]): number {
 
 export function polygonArea(points: readonly Vec2[]): number {
   return Math.abs(signedArea(points));
+}
+
+/** Where a room's name stands: its middle, moved by its own offset (idea: Banhammer1919). */
+export function labelPoint(room: Pick<Room, "points" | "label_offset">): Vec2 {
+  const [x, z] = centroid(room.points);
+  const o = room.label_offset;
+  return o && Number.isFinite(o[0]) && Number.isFinite(o[1]) ? [x + o[0], z + o[1]] : [x, z];
+}
+
+/** How far a point lies from a polygon's outline (m). */
+function edgeDistance(p: Vec2, points: readonly Vec2[]): number {
+  let best = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const dx = b[0] - a[0];
+    const dz = b[1] - a[1];
+    const l = dx * dx + dz * dz;
+    const t = l > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / l)) : 0;
+    best = Math.min(best, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dz));
+  }
+  return best;
+}
+
+/**
+ * A point well inside a room: its middle when that lies inside with some room around it, else the point of a fine
+ * grid farthest from the walls. The middle of an L-shaped room can lie in the room next to it (#900: a person stood
+ * in the hall while located in the L-shaped living room).
+ */
+export function innerPoint(points: readonly Vec2[]): Vec2 {
+  const c = centroid(points);
+  if (points.length < 3 || (pointInPolygon(c, points) && edgeDistance(c, points) >= 0.6)) return c;
+  const xs = points.map((p) => p[0]);
+  const zs = points.map((p) => p[1]);
+  const [x0, x1, z0, z1] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
+  const n = 24;
+  let best: Vec2 = c;
+  let far = pointInPolygon(c, points) ? edgeDistance(c, points) : -1;
+  for (let i = 0; i <= n; i++) {
+    for (let j = 0; j <= n; j++) {
+      const q: Vec2 = [x0 + ((x1 - x0) * i) / n, z0 + ((z1 - z0) * j) / n];
+      if (!pointInPolygon(q, points)) continue;
+      const d = edgeDistance(q, points);
+      if (d > far + 1e-9) [best, far] = [q, d];
+    }
+  }
+  return best;
 }
 
 /** Area-weighted centroid; falls back to the vertex average for degenerate polygons. */

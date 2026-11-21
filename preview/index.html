@@ -17,12 +17,20 @@
     <script type="module">
       // Mock of the Home Assistant frontend object with invented demo data.
       import { DEMO_AREAS, DEMO_BUILDING, DEMO_FLOORS, DEMO_PACK, DEMO_ENTITIES, DEMO_STATES, DEMO_PICTURES, DEMO_PLANS } from "./demo-data.js";
+      import { DEMO_SHOP_PACKS } from "./demo-packs.js";
       import { demoHistory } from "./demo-history.js";
 
       const params = new URLSearchParams(location.search);
       // the power flow lines are on with ?flows (and off without, whatever an earlier page stored)
       try {
         localStorage.setItem("neonplan3d.flows", params.has("flows") ? "1" : "0");
+      } catch {}
+      // the demo always opens in Neon, whatever style a visitor picked last time (?style=<id> opens another one)
+      const DEMO_STYLES = ["neon", "blueprint", "day", "focus", "synth", "cozy", "evening", "winter", "model", "pastel", "warm"];
+      try {
+        const wanted = params.get("style");
+        localStorage.setItem("neonplan3d.theme", DEMO_STYLES.includes(wanted) ? wanted : "neon");
+        localStorage.removeItem("neonplan3d.zoom_style");
       } catch {}
       // the shop connection of the demo: connected when ?shop is given, with one pack to install and one update;
       // ?supporter alone: a connected Supporter-Pass holder with nothing waiting (the NeonPlan Print dot shows on the tab)
@@ -56,13 +64,20 @@
       let building = params.has("empty") ? { version: 1, floors: [], settings: { wall_exterior: 0.24, wall_interior: 0.12, grid: 0.05 } } : DEMO_BUILDING;
       // add-ons not out yet (Pool Pro) only on a local preview or with ?pool: the public demo shows neither the pool's
       // technical room (pump, sand filter, valves, heat pump) nor its pipes (#1063)
-      const unreleasedDemo = params.has("pool") || ["localhost", "127.0.0.1"].includes(location.hostname);
+      // ?public shows a local preview exactly like the online demo (for pictures of the manual)
+      const unreleasedDemo = !params.has("public") && (params.has("pool") || ["localhost", "127.0.0.1"].includes(location.hostname));
       if (!unreleasedDemo) {
         building = structuredClone(building);
         for (const floor of building.floors) {
           floor.furniture = floor.furniture.filter((f) => !/^pool_/.test(f.type));
           for (const area of floor.outdoor ?? []) delete area.pool;
         }
+      }
+      // the demo's start view is framed for a wide screen: a phone held upright needs it from further away
+      const portrait = innerWidth / innerHeight;
+      if (building.settings.start_view && portrait < 0.85) {
+        building = structuredClone(building);
+        building.settings.start_view.radius *= Math.min(1.9, 0.85 / portrait);
       }
       let revision = 1;
       // ?plans: further floor plans (the garden house, a holiday flat); the main plan is `building` above
@@ -100,7 +115,7 @@
         if (importedPacks === null) {
           importedPacks = [DEMO_PACK];
           // the demo has NeonPlan Pro unless ?nopro asks for the locked look
-          if (!params.has("nopro")) importedPacks.push({ format: "fp3dpack", version: 1, id: "demo.pro", name: "NeonPlan Pro (Demo)", publisher: "Mastershort", licensee: null, features: ["camera_cockpit", "weather", "screens", "energy_pro", "sound", "auto_pro", "time_travel", "household", "fun_pets", "fun_halloween", ...(unreleasedDemo ? ["pool"] : [])], items: [] });
+          if (!params.has("nopro")) importedPacks.push({ format: "fp3dpack", version: 1, id: "demo.pro", name: "NeonPlan Pro (Demo)", publisher: "Mastershort", licensee: null, features: ["camera_cockpit", "weather", "screens", "energy_pro", "sound", "auto_pro", "time_travel", "household", "fun_pets", "fun_halloween", "fun_winter", ...(unreleasedDemo ? ["pool"] : [])], items: [] });
           try {
             const res = await fetch("../private/packs/starter.json");
             if (res.ok) importedPacks.push({ licensee: null, ...(await res.json()) });
@@ -119,6 +134,8 @@
           } catch {
             // no local packs
           }
+          // the online demo has no private/ packs: five models of the garden and vehicle packs stand in for them
+          for (const pack of DEMO_SHOP_PACKS) if (!importedPacks.some((p) => p.id === pack.id)) importedPacks.push(pack);
         }
         // ?nopro also drops local feature packs, so the locked look can be seen
         return params.has("nopro") ? importedPacks.filter((p) => !p.features?.length) : importedPacks;
@@ -327,6 +344,12 @@
             case "neonplan3d/packs/remove":
               importedPacks = importedPacks.filter((p) => p.id !== msg.pack_id);
               return null;
+            case "neonplan3d/previews/get": {
+              // the shop's furniture previews: a local copy next to the preview if there is one, else none
+              const res = await fetch("./np-previews/index.json").catch(() => null);
+              if (!res?.ok) return { base: null, packs: [], items: [], bundle: null };
+              return { ...(await res.json()), base: new URL("./np-previews/", location.href).href };
+            }
             case "neonplan3d/license/get":
               return license;
             case "neonplan3d/license/activate":
@@ -422,6 +445,57 @@
         close.onclick = () => bar.remove();
         bar.append(close);
         document.body.append(bar);
+        // the styles, big and right at the top: visitors should see that NeonPlan is not only neon
+        const names = de
+          ? { neon: "Neon", blueprint: "Blueprint", day: "Tag", focus: "Nacht / Fokus", synth: "Synthwave", cozy: "Wohnlich", evening: "Wohnlich Abend", winter: "Winterabend", model: "Architekturmodell", pastel: "Pastell", warm: "Holz & Papier" }
+          : { neon: "Neon", blueprint: "Blueprint", day: "Day", focus: "Night / Focus", synth: "Synthwave", cozy: "Homely", evening: "Homely evening", winter: "Winter evening", model: "Architect's model", pastel: "Pastel", warm: "Wood & paper" };
+        // at the right edge, clear of the house: a narrow column (on phones folded to one button until tapped)
+        const looks = document.createElement("div");
+        looks.style.cssText =
+          (narrow ? "top:300px;" : "top:190px;") +
+          "position:fixed;right:12px;z-index:10;display:grid;gap:6px;width:" + (narrow ? "auto" : "176px") + ";max-height:calc(100vh - " + (narrow ? "380px" : "290px") + ");padding:10px;border-radius:16px;background:rgba(7,11,20,.88);border:1px solid rgba(0,229,255,.45);color:#fff;font:14px/1.3 Figtree,Roboto,sans-serif;box-shadow:0 0 18px rgba(0,229,255,.25)";
+        const head = document.createElement("button");
+        head.style.cssText = "display:grid;gap:2px;text-align:left;background:none;border:0;color:#fff;cursor:pointer;padding:0 2px;font:inherit";
+        head.setAttribute("aria-expanded", "true");
+        const title = de ? "🎨 Designs" : "🎨 Designs";
+        const sub = de ? "Schau dir die verschiedenen Stile an" : "Have a look at the different styles";
+        const row = document.createElement("div");
+        row.style.cssText = "display:grid;gap:6px;overflow-y:auto;min-height:0";
+        const fold = (open) => {
+          row.style.display = open ? "grid" : "none";
+          head.setAttribute("aria-expanded", String(open));
+          head.innerHTML = `<b style="font-size:16px">${title} ${open ? "▾" : "▸"}</b>${open && !narrow ? `<span style="font-size:12px;opacity:.8">${sub}</span>` : ""}`;
+        };
+        head.onclick = () => fold(row.style.display === "none");
+        const panel = document.querySelector("neonplan3d-panel");
+        const chips = DEMO_STYLES.map((id) => {
+          const b = document.createElement("button");
+          b.textContent = names[id];
+          b.dataset.style = id;
+          b.onclick = () => pick(id);
+          return b;
+        });
+        const paint = (id) => {
+          for (const b of chips) {
+            const on = b.dataset.style === id;
+            b.style.cssText = `width:100%;text-align:left;padding:${narrow ? "7px 12px" : "8px 12px"};border-radius:999px;font:600 ${narrow ? "13px" : "14px"} Figtree,Roboto,sans-serif;cursor:pointer;white-space:nowrap;${on ? "background:#00e5ff;color:#06101c;border:1px solid #00e5ff;box-shadow:0 0 14px rgba(0,229,255,.55)" : "background:rgba(255,255,255,.06);color:#e6f6ff;border:1px solid rgba(0,229,255,.4)"}`;
+          }
+        };
+        const pick = (id) => {
+          if (panel) {
+            panel._theme = id;
+            panel.requestUpdate?.();
+          }
+          try {
+            localStorage.setItem("neonplan3d.theme", id);
+          } catch {}
+          paint(id);
+        };
+        paint(panel?._theme && DEMO_STYLES.includes(panel._theme) ? panel._theme : "neon");
+        row.append(...chips);
+        fold(!narrow);
+        looks.append(head, row);
+        document.body.append(looks);
         // phones: many visitors open the demo there and wonder about all the buttons – say once what it is
         // made for and offer the clean view (only the house) or the way to a PC
         let seen = false;

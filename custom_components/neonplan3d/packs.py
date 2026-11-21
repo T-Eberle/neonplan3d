@@ -39,10 +39,11 @@ STUDIO_KEYS = {"bdac241ae58b"}
 
 _ID = vol.All(str, vol.Match(r"^[a-z0-9][a-z0-9_.-]{0,39}$"))
 _TEXT = vol.All(str, vol.Length(min=1, max=80))
-# a colour: "#rrggbb" or a role of the built-in palette (so packs follow the look of the plan)
+# a colour: "#rrggbb" or a role of the built-in palette (so packs follow the look of the plan); "front" (3.5) marks
+# door and drawer fronts, drawn like "white" until a finish tells fronts and carcass apart (#1177)
 _COLOR = vol.Any(
     vol.Match(r"^#[0-9a-fA-F]{6}$"),
-    vol.In(["body", "fabric", "cushion", "wood", "white", "metal", "dark", "glass", "plant", "pot", "accent"]),
+    vol.In(["body", "fabric", "cushion", "wood", "white", "front", "metal", "dark", "glass", "plant", "pot", "accent"]),
 )
 _FRACTION = vol.All(vol.Coerce(float), vol.Range(min=-0.5, max=0.5))
 _SPAN = vol.All(vol.Coerce(float), vol.Range(min=0.001, max=1))
@@ -62,6 +63,9 @@ PART_SCHEMA = vol.Schema(
         vol.Required("h"): _SPAN,
         vol.Required("color"): _COLOR,
         vol.Optional("top"): _COLOR,
+        # the finish a part in a colour of its own follows (3.5, #1175): it keeps its colour until a placed item gets
+        # that finish (a chair's red cover takes the fabric colour, a table's oak top the wood colour)
+        vol.Optional("finish"): vol.In(["wood", "fabric", "front", "body"]),
         # outline: True (soft blue), "glow" (cyan like the walls) or "faint"
         vol.Optional("edges", default=False): vol.Any(bool, vol.In(["glow", "faint"])),
         # lamps: the part shines in the colour and brightness of the linked light
@@ -82,6 +86,20 @@ PART_SCHEMA = vol.Schema(
         vol.Optional("fix"): vol.All(str, vol.Match(r"^[wdh]{1,3}$")),
         # an Advent candle's flame (2.3): drawn only from the n-th Sunday of Advent until 6 January
         vol.Optional("advent"): vol.All(vol.Coerce(int), vol.Range(min=1, max=4)),
+        # fan blades (3.2.1, #1084): turn while the item's fan runs, about the upright ("y") or the front axis ("z")
+        vol.Optional("spin"): vol.In(["y", "z"]),
+        # a live part (3.4): moves or lights with the entity of one of the item's slots - a door opens ("open",
+        # turning about an edge by `amount` degrees), a drawer slides out ("slide", a share of the depth), a drum
+        # turns ("spin"), a tank fills ("level"), a status light shows ok / off / a fault ("blink"), a part glows
+        vol.Optional("bind"): vol.Schema(
+            {
+                vol.Required("slot"): vol.All(str, vol.Match(r"^[a-z0-9_]{1,24}$")),
+                vol.Required("kind"): vol.In(["open", "slide", "spin", "level", "blink", "glow"]),
+                vol.Optional("hinge"): vol.In(["left", "right", "top", "bottom"]),
+                vol.Optional("axis"): vol.In(["x", "y", "z"]),
+                vol.Optional("amount"): vol.All(vol.Coerce(float), vol.Range(min=0, max=180)),
+            }
+        ),
     }
 )
 
@@ -144,6 +162,23 @@ ITEM_SCHEMA = vol.Schema(
         vol.Optional("tags"): vol.All([vol.All(str, vol.Length(min=1, max=30))], vol.Length(max=12)),
         vol.Optional("family"): _ID,
         vol.Optional("variant"): vol.All({vol.All(str, vol.Length(min=2, max=5)): _TEXT}, vol.Length(min=1, max=10)),
+        # slots of the live parts (3.4): the editor links an entity to each (names by language, fitting domains)
+        vol.Optional("slots"): vol.All(
+            [
+                vol.Schema(
+                    {
+                        vol.Required("id"): vol.All(str, vol.Match(r"^[a-z0-9_]{1,24}$")),
+                        vol.Required("name"): vol.All(
+                            {vol.All(str, vol.Length(min=2, max=5)): _TEXT}, vol.Length(min=1, max=24)
+                        ),
+                        vol.Optional("domains"): vol.All(
+                            [vol.All(str, vol.Match(r"^[a-z_]{2,30}$"))], vol.Length(max=8)
+                        ),
+                    }
+                )
+            ],
+            vol.Length(max=8),
+        ),
     }
 )
 
@@ -244,7 +279,13 @@ def _unknown_value(err: vol.Invalid) -> bool:
     """Whether a value outside a known list failed: voluptuous says so in its message; Probatio, which checks
     schemas since Home Assistant 2026.9, gives it the code "not_in_list" (pointed out by hohoanganh)."""
     found = getattr(err, "errors", None) or [err]
-    return any(getattr(e, "code", None) == "not_in_list" or "value must be one of" in str(e) for e in found)
+    # a field this version does not know yet (a part property of a newer pack release) counts the same
+    return any(
+        getattr(e, "code", None) in ("not_in_list", "extra_key", "extra_keys_not_allowed")
+        or "value must be one of" in str(e)
+        or "extra keys not allowed" in str(e)
+        for e in found
+    )
 
 
 def validate_payload(payload: Any) -> dict[str, Any]:

@@ -13,7 +13,7 @@ test("a lamp switched by a relay takes colour and brightness from its colour ent
   // the bulb unavailable: the relay's own (plain) glow
   assert.deepEqual(lightGlow(relay as never, { ...bulb, state: "unavailable" } as never)!.color, [1, 0.71, 0.28]);
 });
-import { slatTilt, slatsInverted, coverTiltButtons, isPulseDrive, isRelevant, apOnline, fanSpeed, climateModeGlow, cooktopLevel, onlyColor, fixedGlowColor, colorCapable, appColor, carLocked, areaEntities, otherAreaEntities, roomClimateSensors, roomClimateValue, unassignedEntities, autoPlace, entityName, fridgeDoors, furnitureEntities, groupByDevice, isActive, kindOf, lightGlow, openingEntities, openingState, powerSensorsOf, primaryEntities, roomPanelEntities, windowPosition, confirmEntities, robotRoom, robotRoomSensor, roomKey, vacuumCleaning } from "./devices.ts";
+import { chargerStatus, slatTilt, slatsInverted, coverTiltButtons, isPulseDrive, isRelevant, apOnline, fanSpeed, climateModeGlow, cooktopLevel, onlyColor, fixedGlowColor, colorCapable, appColor, carLocked, areaEntities, otherAreaEntities, roomClimateSensors, roomClimateValue, unassignedEntities, autoPlace, entityName, fridgeDoors, furnitureEntities, groupByDevice, isActive, kindOf, lightGlow, openingEntities, openingState, powerSensorsOf, primaryEntities, roomPanelEntities, windowPosition, confirmEntities, robotRoom, robotRoomSensor, roomKey, vacuumCleaning } from "./devices.ts";
 import type { Floor, Opening, Room } from "./model.ts";
 import { centroid, newFloor, pointInPolygon } from "./model.ts";
 import type { HomeAssistant } from "./types.ts";
@@ -68,6 +68,17 @@ test("entity names drop the area prefix", () => {
   const hass = hassWith();
   assert.equal(entityName(hass, "light.decke", "Wohnzimmer"), "Decke");
   assert.equal(entityName(hass, "light.stehlampe", "Wohnzimmer"), "Stehlampe");
+});
+
+test("the room panel drops the device name Home Assistant 2026.11 puts in front of a renamed entity (#1181)", () => {
+  const hass = {
+    states: { "light.sw_l1": { entity_id: "light.sw_l1", state: "on", attributes: { friendly_name: "switch_living_a Ceiling light" } } },
+    entities: { "light.sw_l1": { entity_id: "light.sw_l1", name: "Ceiling light", device_id: "d1" } },
+    devices: { d1: { id: "d1", name: "switch_living_a", name_by_user: null } },
+  } as unknown as Parameters<typeof entityName>[0];
+  assert.equal(entityName(hass, "light.sw_l1", undefined, true), "Ceiling light");
+  // elsewhere (editor lists) the full name stays
+  assert.equal(entityName(hass, "light.sw_l1"), "switch_living_a Ceiling light");
 });
 
 test("kinds, active states and light glow", () => {
@@ -990,4 +1001,20 @@ test("a venetian blind reports how far its slats stand open; \"Invert slats\" tu
   const floor = { ...newFloor("f", "EG", 0), openings: [{ id: "w", cover: "cover.raff", slat_invert: true } as unknown as Opening] };
   assert.equal(slatsInverted({ floors: [floor] } as never, "cover.raff"), true);
   assert.equal(slatsInverted({ floors: [floor] } as never, "cover.other"), false);
+});
+
+test("a charger's status: whole words, so not_charging or charger_free is no charging and disconnected no car", () => {
+  const c = (raw: string) => chargerStatus(raw);
+  assert.deepEqual(c("charging"), { charging: true, plugged: true });
+  assert.deepEqual(c("Laden"), { charging: true, plugged: true });
+  assert.deepEqual(c("not_charging"), { charging: false, plugged: false });
+  assert.deepEqual(c("ready_to_charge"), { charging: false, plugged: true });
+  assert.deepEqual(c("charger_free"), { charging: false, plugged: false });
+  assert.deepEqual(c("charger_insert"), { charging: false, plugged: true });
+  assert.deepEqual(c("disconnected"), { charging: false, plugged: false });
+  assert.deepEqual(c("unplugged"), { charging: false, plugged: false });
+  assert.deepEqual(c("connected"), { charging: false, plugged: true });
+  assert.deepEqual(c("Available"), { charging: false, plugged: false });
+  assert.deepEqual(c("SuspendedEV"), { charging: false, plugged: true });
+  assert.deepEqual(c("charge complete"), { charging: false, plugged: true });
 });

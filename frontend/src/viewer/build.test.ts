@@ -4,7 +4,9 @@ import type { BufferGeometry } from "three";
 import type { Floor, Furniture, Opening, Room, Vec2 } from "../model.ts";
 import { newFloor, pointInPolygon, stairsULayout } from "../model.ts";
 import { generateWalls } from "../geometry/walls.ts";
-import { buildFloorGeometry, clipAlong, stairHoles, stairHoleParts, wallHeight } from "./build.ts";
+import { buildFloorGeometry, clipAlong, facingGroups, packStairHole, stairHoles, stairHoleParts, wallHeight } from "./build.ts";
+import { setNaturalPalette } from "./palette.ts";
+import type { PackItem } from "../packs.ts";
 
 const EXT = 0.24;
 const INT = 0.12;
@@ -83,6 +85,29 @@ test("walls are grouped into fold buckets: one per exterior direction plus the i
     assert.ok(segs.some((s) => atY(s, 2.5) && s[6] === b));
     assert.ok(segs.some((s) => atY(s, 1.15) && s[6] === 16 + b));
   });
+});
+
+test("a turned room's outer walls get buckets facing exactly their own way (#1189)", () => {
+  // a 6 × 7 m room turned by 30° beside an axis-aligned one
+  const c = Math.cos(Math.PI / 6);
+  const s = Math.sin(Math.PI / 6);
+  const turned: Room = { ...rect("g", 0, 0, 1, 1), points: ([[0, 0], [6, 0], [6, 7], [0, 7]] as Vec2[]).map(([x, z]) => [20 + x * c - z * s, x * s + z * c] as Vec2) };
+  const geo = buildFloorGeometry(floorWith([rect("a", 0, 0, 4, 3), turned]), EXT, INT);
+  const normals = geo.buckets.filter((b): b is Vec2 => !!b);
+  assert.equal(normals.length, 8);
+  for (const [x, z] of normals) {
+    // every normal is a multiple of 30° (0°, 90° … for the house, 30°, 120° … for the turned room)
+    const deg = (((Math.atan2(z, x) * 180) / Math.PI) % 30 + 30) % 30;
+    assert.ok(deg < 1e-6 || deg > 30 - 1e-6, `normal at ${(Math.atan2(z, x) * 180) / Math.PI}°`);
+  }
+});
+
+test("more wall directions than buckets: the closest are merged, at most 16 buckets (#1189)", () => {
+  const ring: Vec2[] = Array.from({ length: 24 }, (_, i) => [5 * Math.cos((i / 24) * 2 * Math.PI), 5 * Math.sin((i / 24) * 2 * Math.PI)]);
+  const geo = buildFloorGeometry(floorWith([{ ...rect("r", 0, 0, 1, 1), points: ring }]), EXT, INT);
+  assert.ok(geo.buckets.length <= 16);
+  assert.equal(facingGroups([{ out: [1, 0], len: 2 }, { out: [Math.cos(0.01), Math.sin(0.01)], len: 2 }, { out: [0, 1], len: 1 }], 15).normals.length, 2);
+  assert.equal(facingGroups(Array.from({ length: 24 }, (_, i) => ({ out: [Math.cos(i / 4), Math.sin(i / 4)] as Vec2, len: 1 })), 15).normals.length, 15);
 });
 
 test("a door leaves the base line and the wall shadow out of the doorway", () => {
@@ -333,4 +358,112 @@ test("a window across a transition without a wall cuts both outer walls, framed 
   const jambs = segs.filter((s) => vertical(s) && s[1] > 0.8 && s[4] > 0.8 && s[0] > 2 && s[0] < 6);
   near(Math.max(...jambs.map((s) => s[0])), 4.4, 1e-5);
   near(Math.min(...jambs.map((s) => s[0])), 3.2, 1e-5);
+});
+
+test("a pack L-stair opens the floor above only where it stands, not in the empty corner of its box (#1073)", () => {
+  // first flight along the right half, the second along the back, the front left corner empty
+  const box = (x: number, z: number, w: number, d: number) => ({ shape: "box" as const, x, z, w, d, y: 0, h: 0.5, color: "wood" });
+  const item = { id: "l", name: { en: "L" }, size: [2, 2, 3], hole: true, parts: [box(0.25, 0.15, 0.5, 0.7), box(0, -0.35, 1, 0.3)] } as unknown as PackItem;
+  const stair = { id: "s", type: "pack:l", x: 0, z: 0, w: 2, d: 2, h: 3, rotation: 0 } as unknown as Furniture;
+  const inside = (p: Vec2, holes: Vec2[][]) => holes.some((ring) => pointInPolygon(p, ring));
+  const holes = packStairHole(stair, item);
+  assert.ok(inside([0.5, 0.5], holes), "the first flight is open");
+  assert.ok(inside([-0.5, -0.7], holes), "the second flight is open");
+  assert.ok(!inside([-0.5, 0.5], holes), "the empty corner keeps its floor");
+  // mirrored, the empty corner is on the other side
+  const mirrored = packStairHole({ ...stair, mirror: true }, item);
+  assert.ok(inside([-0.5, 0.5], mirrored) && !inside([0.5, 0.5], mirrored));
+  // turned a quarter: the corner turns with it
+  const turned = packStairHole({ ...stair, rotation: 90 }, item);
+  assert.ok(!inside([-0.5, -0.5], turned) && inside([0.5, 0.5], turned));
+});
+
+test("a free wall's own colour shows on both its sides in the homely styles, in a room and outside (#1101)", () => {
+  setNaturalPalette(true);
+  try {
+    const reds = (color: string | null) => {
+      const walls = [
+        { id: "inside", a: [4, 0.5] as Vec2, b: [4, 2.5] as Vec2, thickness: 0.1, height: 1.2, color },
+        { id: "outside", a: [10, 0] as Vec2, b: [12, 0] as Vec2, thickness: null, height: null, color },
+      ];
+      const g = buildFloorGeometry({ ...floorWith([rect("a", 0, 0, 8, 3)]), walls }, EXT, INT).walls;
+      const pos = g.getAttribute("position");
+      const col = g.getAttribute("color");
+      // triangles of each wall's two long faces, told by their middle
+      const red = { inside: 0, outside: 0, other: 0 };
+      for (let i = 0; i < pos.count; i += 3) {
+        const m = [0, 1, 2].reduce((s, k) => [s[0] + pos.getX(i + k) / 3, s[1] + pos.getY(i + k) / 3, s[2] + pos.getZ(i + k) / 3], [0, 0, 0]);
+        if (m[1] < 0.1) continue;
+        const isRed = col.getX(i) > 0.3 && col.getY(i) < 0.05 && col.getZ(i) < 0.05;
+        const which = Math.abs(m[0] - 4) < 0.1 && m[2] > 0.45 && m[2] < 2.55 ? "inside" : m[0] > 9.95 && m[0] < 12.05 && Math.abs(m[2]) < 0.1 ? "outside" : "other";
+        if (isRed) red[which]++;
+      }
+      return red;
+    };
+    const plain = reds(null);
+    assert.deepEqual(plain, { inside: 0, outside: 0, other: 0 });
+    const own = reds("#ff0000");
+    assert.ok(own.inside >= 4 && own.outside >= 4, JSON.stringify(own));
+    // the room's own walls keep their colour
+    assert.equal(own.other, 0);
+  } finally {
+    setNaturalPalette(false);
+  }
+});
+
+test("a passage the whole length of a free wall leaves nothing standing at its ends (#1158)", () => {
+  // a free wall 4 m long and 0.365 m thick, with a 2 m high passage over its full length
+  const room = rect("r", 0, 0, 6, 6);
+  const wall = { id: "fw", a: [1, 3] as Vec2, b: [5, 3] as Vec2, thickness: 0.365 };
+  const pass: Opening = { ...opening("door", "r", 0, 2, 4), id: "p", wall: "fw", height: 2 };
+  const floor = { ...floorWith([room], [pass]), walls: [wall] };
+  const geo = buildFloorGeometry(floor, EXT, INT);
+  const H = floor.height;
+  // the wall's faces near its ends (x 1 and 5, z within the thickness): only the lintel above 2 m
+  const pos = geo.walls.getAttribute("position");
+  for (let i = 0; i < pos.count; i += 3) {
+    const xs = [0, 1, 2].map((k) => pos.getX(i + k));
+    const zs = [0, 1, 2].map((k) => pos.getZ(i + k));
+    if (!zs.every((z) => Math.abs(z - 3) < 0.19) || !xs.every((x) => x > 0.9 && x < 5.1)) continue;
+    // (the slab under the doorway stays below the floor, #290)
+    if ([0, 1, 2].every((k) => pos.getY(i + k) <= 0)) continue;
+    for (let k = 0; k < 3; k++) assert.ok(pos.getY(i + k) > 2 - 0.03, `wall face below the lintel at ${xs[k].toFixed(2)}, ${pos.getY(i + k).toFixed(2)}`);
+  }
+  // no lines in the passage at the wall's ends: no base or cut line across, no corner or jamb line below 2 m
+  const segs = segments(geo.lines).filter((s) => [s[0], s[3]].every((x) => Math.abs(x - 1) < 1e-4 || Math.abs(x - 5) < 1e-4) && [s[2], s[5]].every((z) => Math.abs(z - 3) < 0.19));
+  assert.ok(!segs.some((s) => Math.min(s[1], s[4]) < 2 - 0.03), "a line stands in the passage");
+  // the lintel above keeps its corner lines up to the top
+  assert.ok(segs.some((s) => vertical(s) && Math.abs(Math.max(s[1], s[4]) - H) < 1e-6), "the lintel's corner line");
+});
+
+test("a door across a transition leaves no plate across its doorway (#1158, #624)", () => {
+  const a = rect("a", 0, 0, 4, 3);
+  const b = { ...rect("b", 4, 0, 7, 3), wall_heights: [null, null, null, 0] };
+  // a door 1 m wide from x = 3.3 to 4.3, across the transition at x = 4 in the front wall (z from -EXT to 0)
+  const geo = buildFloorGeometry(floorWith([a, b], [opening("door", "a", 0, 3.8, 1)]), EXT, INT);
+  const pos = geo.walls.getAttribute("position");
+  for (let i = 0; i < pos.count; i += 3) {
+    const v = [0, 1, 2].map((k) => [pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k)]);
+    const across = v.every((p) => Math.abs(p[0] - 4) < 1e-6 && p[2] < 1e-6) && Math.max(...v.map((p) => p[2])) - Math.min(...v.map((p) => p[2])) > 1e-6;
+    assert.ok(!(across && Math.min(...v.map((p) => p[1])) < 1.9 && Math.max(...v.map((p) => p[1])) > 0.1), "a plate across the doorway at the transition");
+  }
+});
+
+test("beside a window only the reveal is drawn: no wall face under the sill or over the lintel at its edge (#1182)", () => {
+  // a room 6 × 4 m, a window in the front wall (z from -EXT to 0): centre 3 m, 1.2 m wide, sill 0.9 m, 1.3 m high
+  const win: Opening = { ...opening("window", "a", 0, 3, 1.2), sill: 0.9, height: 1.3 };
+  const geo = buildFloorGeometry(floorWith([rect("a", 0, 0, 6, 4)], [win]), EXT, INT);
+  near(geo.openings[0].start[0], 2.4);
+  const pos = geo.walls.getAttribute("position");
+  let reveal = 0;
+  for (let i = 0; i < pos.count; i += 3) {
+    const v = [0, 1, 2].map((k) => [pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k)]);
+    // a face across the wall at the window's edge x = 2.4
+    if (!v.every((p) => Math.abs(p[0] - 2.4) < 1e-6 && p[2] < 1e-6 && p[2] > -EXT - 1e-6)) continue;
+    for (const p of v) assert.ok(p[1] > 0.9 - 1e-6 && p[1] < 2.2 + 1e-6, `wall face at the window's edge at y ${p[1].toFixed(3)}`);
+    // the face's area in the y/z plane
+    reveal += Math.abs((v[1][1] - v[0][1]) * (v[2][2] - v[0][2]) - (v[2][1] - v[0][1]) * (v[1][2] - v[0][2])) / 2;
+  }
+  // the reveal itself stays closed: 1.3 m high across the wall's thickness
+  near(reveal, 1.3 * EXT, 1e-5);
 });
